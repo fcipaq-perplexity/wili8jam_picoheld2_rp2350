@@ -1,0 +1,269 @@
+/*
+ * Pico Engine - a library for the Pico Held 2 handheld
+ *
+ * Copyright (C) 2023 - 2025 Daniel Kammer (daniel.kammer@web.de)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+ 
+#include <hwcfg.h>
+
+#pragma once
+
+#define LCD_FREQ  (37000000) // (37000000)
+
+#define LCD_VBP		      (20)
+#define LCD_VFP	 	      (15)
+#define LCD_VPW		       (5)
+#define LCD_HBP	          (80)
+#define LCD_HFP		      (15)  // min: 4
+#define LCD_HPW	           (5)  // min: 1
+
+#define LCD_PHYS_RES_X   (720)  // max: 1024
+#define LCD_PHYS_RES_Y   (720)  // max: 1024
+
+#define LCD_GS_INV_UNSUPPORTED
+
+#include <typedefs.h>
+
+typedef enum
+{
+  END_LIST,
+  DELAY,
+  WRITE,
+} spi_operation_type_t;
+
+typedef enum
+{
+  SPI_COMMAND,
+  SPI_DATA
+} spi_dc_t;
+
+void lcd_spi_send(const uint8_t* init_seq);
+
+/*************************** init sequences ***********************/
+
+// *************** Init code for 720x720 square ER-TFT3.95-1 from buydisplay (NV3052C controller IC) ***************
+// same as from ecyberspace
+static const uint8_t panel_init_operations[] = {
+	// 720X720 BOE3.95 6G （B3 QV040YNQ-N80）
+
+// EXT page 1
+	WRITE, 2, 0xFF, 0x30,              
+	WRITE, 2, 0xFF, 0x52,
+	WRITE, 2, 0xFF, 0x01,
+	
+	WRITE, 2, 0xE3, 0x00,
+	WRITE, 2, 0x0A, 0x00,
+	WRITE, 2, 0x23, 0x20,  // 0x20=DE, 0x00=DE+SYNC
+	WRITE, 2, 0x24, 0x0f,
+	WRITE, 2, 0x25, 0x14,
+	WRITE, 2, 0x26, 0x2E,
+	WRITE, 2, 0x27, 0x2E,
+	WRITE, 2, 0x29, 0x02,
+	WRITE, 2, 0x2A, 0xCF,
+	WRITE, 2, 0x32, 0x34,
+	WRITE, 2, 0x38, 0x9C,  // vcom_adj
+	WRITE, 2, 0x39, 0xA7,  // vcom_adj
+	WRITE, 2, 0x3A, 0x77,  // vcom_adj
+	WRITE, 2, 0x3B, 0x94,
+	WRITE, 2, 0x40, 0x07,
+	WRITE, 2, 0x42, 0x6D,
+	WRITE, 2, 0x43, 0x83,
+	WRITE, 2, 0x81, 0x00,
+	WRITE, 2, 0x91, 0x57,  //extpw ctrl2
+	WRITE, 2, 0x92, 0x57,  //extpw ctrl3
+	WRITE, 2, 0xA0, 0x52,
+	WRITE, 2, 0xA1, 0x50,
+	WRITE, 2, 0xA4, 0x9C,
+	WRITE, 2, 0xA7, 0x02,
+	WRITE, 2, 0xA8, 0x02,
+	WRITE, 2, 0xA9, 0x02,
+	WRITE, 2, 0xAA, 0xA8,
+	WRITE, 2, 0xAB, 0x28,
+	WRITE, 2, 0xAE, 0xD2,
+	WRITE, 2, 0xAF, 0x02,
+	WRITE, 2, 0xB0, 0xD2,
+	WRITE, 2, 0xB2, 0x26,
+	WRITE, 2, 0xB3, 0x26,
+	
+// EXT table 2
+	WRITE, 2, 0xFF, 0x30,
+	WRITE, 2, 0xFF, 0x52,
+	WRITE, 2, 0xFF, 0x02,
+	
+	// PGAM (gam_conf)
+	WRITE, 2, 0xB0, 0x02,
+	WRITE, 2, 0xB1, 0x0E,
+	WRITE, 2, 0xB2, 0x08,
+	WRITE, 2, 0xB3, 0x29,
+	WRITE, 2, 0xB4, 0x28,
+	WRITE, 2, 0xB5, 0x37,
+	WRITE, 2, 0xB6, 0x12,
+	WRITE, 2, 0xB7, 0x32,
+	WRITE, 2, 0xB8, 0x0B,
+	WRITE, 2, 0xB9, 0x03,
+	WRITE, 2, 0xBA, 0x0E,
+	WRITE, 2, 0xBB, 0x0D,
+	WRITE, 2, 0xBC, 0x10,
+	WRITE, 2, 0xBD, 0x13,
+	WRITE, 2, 0xBE, 0x18,
+	WRITE, 2, 0xBF, 0x0F,
+	WRITE, 2, 0xC0, 0x16,
+	WRITE, 2, 0xC1, 0x08,
+
+	// NGAM (gam_conf)
+	WRITE, 2, 0xD0, 0x05,
+	WRITE, 2, 0xD1, 0x0B,
+	WRITE, 2, 0xD2, 0x03,
+	WRITE, 2, 0xD3, 0x33,
+	WRITE, 2, 0xD4, 0x32,
+	WRITE, 2, 0xD5, 0x32,
+	WRITE, 2, 0xD6, 0x0F,
+	WRITE, 2, 0xD7, 0x39,
+	WRITE, 2, 0xD8, 0x0B,
+	WRITE, 2, 0xD9, 0x02,
+	WRITE, 2, 0xDA, 0x10,
+	WRITE, 2, 0xDB, 0x0F,
+	WRITE, 2, 0xDC, 0x11,
+	WRITE, 2, 0xDD, 0x14,
+	WRITE, 2, 0xDE, 0x1A,
+	WRITE, 2, 0xDF, 0x11,
+	WRITE, 2, 0xE0, 0x18,
+	WRITE, 2, 0xE1, 0x04,
+	
+// EXT table 3
+	WRITE, 2, 0xFF, 0x30,
+	WRITE, 2, 0xFF, 0x52,
+	WRITE, 2, 0xFF, 0x03,
+	
+// GIP	
+	WRITE, 2, 0x00, 0x00,
+	WRITE, 2, 0x01, 0x00,
+	WRITE, 2, 0x02, 0x00,
+	WRITE, 2, 0x03, 0x00,
+	WRITE, 2, 0x08, 0x0D,
+	WRITE, 2, 0x09, 0x0E,
+	WRITE, 2, 0x0A, 0x0F,
+	WRITE, 2, 0x0B, 0x10,
+	WRITE, 2, 0x20, 0x00,
+	WRITE, 2, 0x21, 0x00,
+	WRITE, 2, 0x22, 0x00,
+	WRITE, 2, 0x23, 0x00,
+	WRITE, 2, 0x28, 0x22,
+	WRITE, 2, 0x2A, 0xE9,
+	WRITE, 2, 0x2B, 0xE9,
+	WRITE, 2, 0x30, 0x00,
+	WRITE, 2, 0x31, 0x00,
+	WRITE, 2, 0x32, 0x00,
+	WRITE, 2, 0x33, 0x00,
+	WRITE, 2, 0x34, 0x01,
+	WRITE, 2, 0x35, 0x00,
+	WRITE, 2, 0x36, 0x00,
+	WRITE, 2, 0x37, 0x03,
+	WRITE, 2, 0x40, 0x0A,  
+	WRITE, 2, 0x41, 0x0B,  
+	WRITE, 2, 0x42, 0x0C,  
+	WRITE, 2, 0x43, 0x0D, 
+	WRITE, 2, 0x44, 0x22,
+	WRITE, 2, 0x45, 0xE4, 
+	WRITE, 2, 0x46, 0xE5,  
+	WRITE, 2, 0x47, 0x22,
+	WRITE, 2, 0x48, 0xE6,  
+	WRITE, 2, 0x49, 0xE7,
+	WRITE, 2, 0x50, 0x0E,  
+	WRITE, 2, 0x51, 0x0F,  
+	WRITE, 2, 0x52, 0x10,  
+	WRITE, 2, 0x53, 0x11,
+	
+	WRITE, 2, 0x54, 0x22,
+	WRITE, 2, 0x55, 0xE8,  
+	WRITE, 2, 0x56, 0xE9,  
+	WRITE, 2, 0x57, 0x22,
+	WRITE, 2, 0x58, 0xEA,  
+	WRITE, 2, 0x59, 0xEB,
+	
+	WRITE, 2, 0x60, 0x05,  
+	WRITE, 2, 0x61, 0x05,  
+	WRITE, 2, 0x65, 0x0A,  
+	WRITE, 2, 0x66, 0x0A,  
+	
+	//PANELU2 (?)
+	WRITE, 2, 0x80, 0x05,
+	WRITE, 2, 0x81, 0x00,
+	WRITE, 2, 0x82, 0x02,
+	WRITE, 2, 0x83, 0x04,
+	WRITE, 2, 0x84, 0x00,
+	WRITE, 2, 0x85, 0x00,
+	WRITE, 2, 0x86, 0x1f,
+	WRITE, 2, 0x87, 0x1f,
+	WRITE, 2, 0x88, 0x0a,
+	WRITE, 2, 0x89, 0x0c,
+	WRITE, 2, 0x8A, 0x0e,
+	WRITE, 2, 0x8B, 0x10,
+	
+	WRITE, 2, 0x96, 0x05,
+	WRITE, 2, 0x97, 0x00,
+	WRITE, 2, 0x98, 0x01,
+	WRITE, 2, 0x99, 0x03,
+	WRITE, 2, 0x9A, 0x00,
+	WRITE, 2, 0x9B, 0x00,
+	WRITE, 2, 0x9C, 0x1f, 
+	WRITE, 2, 0x9D, 0x1f, 
+	WRITE, 2, 0x9E, 0x09, 
+	WRITE, 2, 0x9F, 0x0b, 
+	WRITE, 2, 0xA0, 0x0d, 
+	WRITE, 2, 0xA1, 0x0f, 
+	   
+	WRITE, 2, 0xFF, 0x30,
+	WRITE, 2, 0xFF, 0x52,
+	WRITE, 2, 0xFF, 0x00,
+// END (exit EXTC)
+
+	//WRITE, 2, 0x36, 0x0a,  // MAD  // 0x02 = RGB, 0x0a = BGR
+
+  WRITE, 2, 0x36, 0b1000, //default: 0X0a, // 0x09 flipped vertically and horizontally (not working on buydisplay), 0a: default
+
+//	WRITE, 2, 0x3a, 0x60,  // 18 bit colors
+												
+ 	WRITE, 1, 0x11,  // Sleep out
+	
+  DELAY, 120,
+	
+	WRITE, 1, 0x29,  // Display on
+
+  END_LIST
+
+	
+};
+
+static const uint8_t panel_sleep_operations[] = {
+  // enter sleep
+  WRITE, 1, 0x28,
+  DELAY, 10,                        
+  WRITE, 1, 0x10, 
+  DELAY, 20,                                    
+
+  END_LIST
+};
+
+static const uint8_t panel_wake_operations[] = {
+  // enter sleep
+  WRITE, 1, 0x11,
+  DELAY, 120,
+  WRITE, 1, 0x29, 
+
+  END_LIST
+};
