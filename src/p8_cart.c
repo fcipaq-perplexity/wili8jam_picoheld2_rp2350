@@ -438,12 +438,23 @@ static void cart_gameloop_inner(lua_State *L) {
     // Use PICO-8 screen-drawing print during game loop (not console_print)
     p8_register_print(L);
 
+    // Performance statistics (serial, every 5 s)
+    uint32_t st_frames = 0;
+    uint64_t st_input = 0, st_update = 0, st_draw = 0, st_flip = 0, st_sleep = 0;
+    uint32_t st_late = 0;
+    absolute_time_t st_start = get_absolute_time();
+    held_lcd_stats(NULL, NULL, NULL);   // reset counters
+
     // Main game loop
     while (true) {
         absolute_time_t frame_start = get_absolute_time();
+        absolute_time_t t_mark = frame_start;
+#define ST_LAP(acc) do { absolute_time_t _n = get_absolute_time(); \
+        acc += absolute_time_diff_us(t_mark, _n); t_mark = _n; } while (0)
 
         // Update input state
         input_update();
+        ST_LAP(st_input);
 
         // SELECT+START exits the cart
         if (input_exit_requested()) {
@@ -454,17 +465,20 @@ static void cart_gameloop_inner(lua_State *L) {
         // Call _update or _update60
         if (!call_global(L, update_fn))
             break;
+        ST_LAP(st_update);
 
         // Call _draw (auto-flips after _draw per PICO-8 behavior)
         if (has_global_func(L, "_draw")) {
             if (!call_global(L, "_draw"))
                 break;
+            ST_LAP(st_draw);
 
             // Measure CPU usage before flip (game logic only, not DVI blit)
             int64_t game_elapsed = absolute_time_diff_us(frame_start, get_absolute_time());
             p8_set_cpu_usage((float)game_elapsed / (float)frame_us);
 
             gfx_flip();
+            ST_LAP(st_flip);
         } else {
             int64_t game_elapsed = absolute_time_diff_us(frame_start, get_absolute_time());
             p8_set_cpu_usage((float)game_elapsed / (float)frame_us);
@@ -475,6 +489,29 @@ static void cart_gameloop_inner(lua_State *L) {
         int64_t remaining = (int64_t)frame_us - total_elapsed;
         if (remaining > 0)
             sleep_us(remaining);
+        else
+            st_late++;
+        ST_LAP(st_sleep);
+
+        st_frames++;
+        int64_t st_elapsed = absolute_time_diff_us(st_start, get_absolute_time());
+        if (st_elapsed >= 5000000) {
+            uint32_t pres_us, presented, dropped;
+            held_lcd_stats(&pres_us, &presented, &dropped);
+            unsigned f = st_frames;
+            printf("perf: %u.%u fps (target %d), avg ms: input %.2f update %.2f draw %.2f "
+                   "flip %.2f idle %.2f | late %u | lcd: %u shown, %u dropped, present %.2f ms (core1)\n",
+                   (unsigned)(f * 10000000ull / st_elapsed) / 10,
+                   (unsigned)(f * 10000000ull / st_elapsed) % 10, use_60fps ? 60 : 30,
+                   st_input / 1000.0 / f, st_update / 1000.0 / f, st_draw / 1000.0 / f,
+                   st_flip / 1000.0 / f, st_sleep / 1000.0 / f, (unsigned)st_late,
+                   (unsigned)presented, (unsigned)dropped, pres_us / 1000.0);
+            st_frames = 0;
+            st_input = st_update = st_draw = st_flip = st_sleep = 0;
+            st_late = 0;
+            st_start = get_absolute_time();
+        }
+#undef ST_LAP
     }
 
     p8_set_gameloop_mode(false);

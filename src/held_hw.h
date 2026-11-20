@@ -93,6 +93,19 @@ void held_lcd_present(const uint8_t *fb4, const uint8_t *disp_pal, const uint16_
 void held_lcd_set_frame_drop(bool enable);
 uint32_t held_lcd_frames_dropped(void);
 
+// Presenting runs on core 1: held_lcd_present() copies the frame and returns.
+// held_lcd_sync() waits until core 1 has finished the last frame.
+void held_lcd_sync(void);
+
+// Since the last call: average core-1 present time, frames presented and
+// frames dropped (resets the counters).
+void held_lcd_stats(uint32_t *present_avg_us, uint32_t *presented, uint32_t *dropped);
+
+// Bus fabric priority for the CPUs over DMA (the LCD scanout DMA is busy all
+// the time). Default HELD_CPU_BUS_PRIORITY, switchable at runtime.
+void held_set_cpu_bus_priority(bool high);
+bool held_get_cpu_bus_priority(void);
+
 void held_lcd_set_scale_mode(int mode);
 int  held_lcd_get_scale_mode(void);
 

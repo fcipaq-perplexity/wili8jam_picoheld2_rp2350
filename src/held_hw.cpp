@@ -12,6 +12,8 @@
 #include "hardware/adc.h"
 #include "hardware/gpio.h"
 #include "hardware/vreg.h"
+#include "hardware/structs/busctrl.h"
+#include "pico/multicore.h"
 
 // Pico Engine (picoengine/src) - individual headers on purpose: picoengine.h
 // defines pe_init() in the header, which breaks when included more than once.
@@ -339,6 +341,8 @@ uint32_t held_buttons_poll(void) {
 // ---------------------------------------------------------------------------
 
 static LCD_DPI *lcd = nullptr;
+static void core1_present_loop(void);
+static volatile bool core1_running = false;
 static color_palette_t hw_pal = nullptr;   // 256 x RGB565, read live by the CLUT PIO/DMA
 static int scale_mode = HELD_SCALE_CROP;
 static uint8_t lut_x[LCD_W];               // LCD column -> PICO-8 column
@@ -411,6 +415,12 @@ int held_lcd_init(void) {
     lcd_backlight_init();
     lcd_backlight_set(backlight_level);
 
+    held_set_cpu_bus_priority(HELD_CPU_BUS_PRIORITY);
+
+    // Frame scaling runs on core 1
+    multicore_launch_core1(core1_present_loop);
+    while (!core1_running) tight_loop_contents();
+
     // Calibrate the analog stick centre now: a few hundred ms after power-on
     // (panel reset), the supplies have settled.
     held_stick_recalibrate();
@@ -439,19 +449,8 @@ void held_lcd_set_frame_drop(bool enable) {
     frame_drop = enable;
 }
 
-void held_lcd_present(const uint8_t *fb4, const uint8_t *disp_pal, const uint16_t *pal565) {
-    if (!lcd) return;
-
-#if HELD_LCD_NUM_FB > 1
-    // Game loop: never wait for the panel. If the previous frame hasn't been
-    // picked up by a vblank yet, skip this one (keeps carts at their speed
-    // when the panel refreshes slower than _update60).
-    if (frame_drop && !lcd->is_backbuffer_free()) {
-        frames_dropped++;
-        return;
-    }
-#endif
-
+// Scale + palette + enqueue. Runs on core 1 (or core 0 before core 1 runs).
+static void present_now(const uint8_t *fb4, const uint8_t *disp_pal, const uint16_t *pal565) {
     gbuffer_t fb;
 #if HELD_LCD_NUM_FB > 1
     if (lcd->get_backbuffer(&fb) != LCD_SUCCESS) return;   // waits for a free buffer
@@ -493,4 +492,81 @@ void held_lcd_present(const uint8_t *fb4, const uint8_t *disp_pal, const uint16_
 #if HELD_LCD_NUM_FB > 1
     lcd->enqueue_backbuffer();
 #endif
+}
+
+// ---- present on core 1 ------------------------------------------------------
+// Core 0 copies the 8 KB PICO-8 screen + screen palette into a staging buffer
+// and continues with the next frame; core 1 scales it into the LCD back buffer.
+static uint8_t stage_fb4[P8_W * P8_H / 2];
+static uint8_t stage_pal[16];
+static bool stage_has_pal;
+static const uint16_t *stage_pal565;
+static volatile bool core1_busy = false;
+static volatile uint32_t present_us_sum = 0, present_count = 0;
+
+static void core1_present_loop(void) {
+    core1_running = true;
+    while (true) {
+        (void)multicore_fifo_pop_blocking();
+        uint32_t t0 = time_us_32();
+        present_now(stage_fb4, stage_has_pal ? stage_pal : nullptr, stage_pal565);
+        present_us_sum += time_us_32() - t0;
+        present_count++;
+        __dmb();
+        core1_busy = false;
+    }
+}
+
+void held_lcd_present(const uint8_t *fb4, const uint8_t *disp_pal, const uint16_t *pal565) {
+    if (!lcd) return;
+
+    if (!core1_running) {
+        present_now(fb4, disp_pal, pal565);
+        return;
+    }
+
+    if (frame_drop) {
+        // Game loop: never wait. Skip the frame if core 1 is still busy or the
+        // panel hasn't taken the previous frame yet (keeps carts at their speed).
+#if HELD_LCD_NUM_FB > 1
+        if (core1_busy || !lcd->is_backbuffer_free()) {
+#else
+        if (core1_busy) {
+#endif
+            frames_dropped++;
+            return;
+        }
+    } else {
+        while (core1_busy) tight_loop_contents();
+    }
+
+    memcpy(stage_fb4, fb4, sizeof(stage_fb4));
+    stage_has_pal = (disp_pal != nullptr);
+    if (disp_pal) memcpy(stage_pal, disp_pal, 16);
+    stage_pal565 = pal565;
+    __dmb();
+    core1_busy = true;
+    multicore_fifo_push_blocking(1);
+}
+
+void held_lcd_sync(void) {
+    while (core1_busy) tight_loop_contents();
+}
+
+void held_lcd_stats(uint32_t *present_avg_us, uint32_t *presented, uint32_t *dropped) {
+    uint32_t n = present_count;
+    if (present_avg_us) *present_avg_us = n ? present_us_sum / n : 0;
+    if (presented) *presented = n;
+    if (dropped) *dropped = frames_dropped;
+    present_us_sum = 0;
+    present_count = 0;
+    frames_dropped = 0;
+}
+
+void held_set_cpu_bus_priority(bool high) {
+    busctrl_hw->priority = high ? (BUSCTRL_BUS_PRIORITY_PROC0_BITS | BUSCTRL_BUS_PRIORITY_PROC1_BITS) : 0;
+}
+
+bool held_get_cpu_bus_priority(void) {
+    return busctrl_hw->priority != 0;
 }

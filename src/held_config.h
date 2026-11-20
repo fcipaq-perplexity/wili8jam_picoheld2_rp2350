@@ -121,6 +121,13 @@
 #define HELD_LCD_NUM_FB         2
 #endif
 
+// Give the CPU cores priority over DMA on the bus fabric (0/1). The LCD
+// scanout DMA is busy all the time; with 1 the CPU wins on conflicts (the
+// panel's pixel clock may then stall a bit more). Runtime: sys.busprio(true)
+#ifndef HELD_CPU_BUS_PRIORITY
+#define HELD_CPU_BUS_PRIORITY   0
+#endif
+
 // Backlight at boot, 5..100
 #ifndef HELD_BACKLIGHT_DEFAULT
 #define HELD_BACKLIGHT_DEFAULT 50

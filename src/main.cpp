@@ -79,7 +79,16 @@ static int sys_memtotal(lua_State *L) {
     return 1;
 }
 
+// sys.busprio([on]): CPU priority over DMA on the bus fabric; returns state
+static int sys_busprio(lua_State *L) {
+    if (!lua_isnoneornil(L, 1)) held_set_cpu_bus_priority(lua_toboolean(L, 1));
+    printf("cpu bus priority: %s\n", held_get_cpu_bus_priority() ? "high" : "normal");
+    lua_pushboolean(L, held_get_cpu_bus_priority());
+    return 1;
+}
+
 static const luaL_Reg syslib[] = {
+    {"busprio", sys_busprio},
     {"memfree",  sys_memfree},
     {"memused",  sys_memused},
     {"memtotal", sys_memtotal},
