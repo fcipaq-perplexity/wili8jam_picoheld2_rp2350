@@ -177,6 +177,36 @@ pico_enable_stdio_uart(wili8jam 0)
 
 pico_add_extra_outputs(wili8jam)
 
+# --- Hot code in RAM ---
+# Code runs from flash through the 16 KB XIP cache, which it shares with the
+# PSRAM (Lua heap). The Lua VM core, the allocator and the PICO-8 drawing
+# code are linked into the RAM-resident .data section instead (~100 KB).
+# The linker script is generated from the SDK's memmap_default.ld: the files
+# are added to the EXCLUDE_FILE list of flash .text, and the SDK script then
+# places all excluded .text in .data (RAM) by itself.
+option(HELD_HOT_CODE_IN_RAM "Link the Lua VM core and PICO-8 drawing code into RAM" ON)
+if(HELD_HOT_CODE_IN_RAM)
+    set(HOT_OBJS
+        "*liblua54.a:lvm.c.o *liblua54.a:ltable.c.o *liblua54.a:lgc.c.o"
+        "*liblua54.a:ldo.c.o *liblua54.a:lfunc.c.o *liblua54.a:lstring.c.o"
+        "*liblua54.a:ltm.c.o *liblua54.a:lapi.c.o *libtlsf.a:tlsf.c.o"
+        "*gfx.c.o *p8_api.c.o")
+    string(JOIN " " HOT_OBJS ${HOT_OBJS})
+    set(SDK_LD ${PICO_SDK_PATH}/src/rp2_common/pico_crt0/rp2350/memmap_default.ld)
+    file(READ ${SDK_LD} LD_TEXT)
+    set(LD_FROM "*(EXCLUDE_FILE(*libgcc.a: *libc.a:*lib_a-mem*.o *libm.a:) .text*)")
+    set(LD_TO   "*(EXCLUDE_FILE(*libgcc.a: *libc.a:*lib_a-mem*.o *libm.a: ${HOT_OBJS}) .text*)")
+    string(FIND "${LD_TEXT}" "${LD_FROM}" LD_POS)
+    if(LD_POS EQUAL -1)
+        message(FATAL_ERROR "HELD_HOT_CODE_IN_RAM: pattern not found in ${SDK_LD} (SDK changed?)")
+    endif()
+    string(REPLACE "${LD_FROM}" "${LD_TO}" LD_TEXT "${LD_TEXT}")
+    # pico_flash_region.ld (INCLUDEd by the script) is generated in CMAKE_BINARY_DIR
+    file(WRITE ${CMAKE_BINARY_DIR}/memmap_wili8jam.ld "${LD_TEXT}")
+    pico_set_linker_script(wili8jam ${CMAKE_BINARY_DIR}/memmap_wili8jam.ld)
+    target_compile_definitions(wili8jam PRIVATE HELD_HOT_CODE_IN_RAM=1)
+endif()
+
 # --- Hardware bring-up test (display, colours, scaling, buttons, audio) ---
 add_executable(picoheld2_hwtest
     src/hwtest.c

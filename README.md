@@ -14,7 +14,7 @@ Runs PICO-8 `.p8` and `.p8.png` cartridges from an SD card on the Pico Held 2's 
 - **128x128 screen on the 720x720 LCD** -- two scaling modes: *crop* (2x, outer 4 pixels on each side cut off) and *fit* (1.875x, whole screen)
 - **Cart picker** -- browse folders on the SD card and launch carts with the buttons
 - **Lua 5.4 REPL** -- over USB CDC serial (also used for debug output)
-- **8 MB PSRAM heap** -- Lua allocations backed by TLSF allocator on external PSRAM
+- **Memory layout tuned for speed** -- PICO-8 memory (sprites, map, screen) in internal SRAM; small Lua objects in a 128 KB SRAM pool, the rest of the Lua heap in 8 MB PSRAM; hot code in RAM; screen scaling on core 1
 
 ## Hardware
 
@@ -69,6 +69,7 @@ Options:
 
 - `-DPICOHELD2_HW_VARIANT=0` -- Pico Held 2 v1.5, SunmaxIC panel (default)
 - `-DPICOHELD2_HW_VARIANT=1` -- Pico Held 2 v1.4, Buydisplay panel
+- `-DHELD_HOT_CODE_IN_RAM=ON` -- link the Lua VM core, the allocator and the PICO-8 drawing code into RAM instead of running them from flash through the XIP cache (default ON, ~100 KB RAM)
 - `-DHELD_SYS_CLOCK_KHZ=252000` -- system clock (default 252 MHz). The LCD scanout is DMA bound, so the panel refresh scales with it (about 44 Hz at 252 MHz). In the game loop frames are dropped rather than slowing a cart down.
 
 Outputs:

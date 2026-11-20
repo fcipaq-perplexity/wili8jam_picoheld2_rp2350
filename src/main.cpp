@@ -23,6 +23,7 @@ extern "C" {
 #include "p8_cart.h"
 #include "p8_console.h"
 #include "held_hw.h"
+#include "held_config.h"
 }
 
 static tlsf_t psram_tlsf;
@@ -31,15 +32,67 @@ static size_t psram_total_size;
 static FATFS fatfs;
 static bool sd_mounted = false;
 
+// --- Lua allocator: small objects in internal SRAM, the rest in PSRAM ---
+// Tables, strings, closures etc. are mostly small and hot; keeping them in
+// SRAM avoids PSRAM accesses through the (shared, 16 KB) XIP cache. Large
+// blocks (arrays, big strings, code) and the overflow go to PSRAM.
+static tlsf_t sram_tlsf = NULL;
+static uint8_t *sram_pool_base = NULL;
+static size_t sram_pool_size = 0;
+
+static inline bool in_sram_pool(void *p) {
+    return sram_pool_base && (uint8_t *)p >= sram_pool_base &&
+           (uint8_t *)p < sram_pool_base + sram_pool_size;
+}
+
 static void* lua_psram_alloc(void* ud, void* ptr, size_t osize, size_t nsize) {
-    (void)ud; (void)osize;
+    (void)ud;
     if (nsize == 0) {
-        tlsf_free(psram_tlsf, ptr);
+        if (ptr) {
+            if (in_sram_pool(ptr)) tlsf_free(sram_tlsf, ptr);
+            else tlsf_free(psram_tlsf, ptr);
+        }
         return NULL;
     }
-    if (ptr == NULL)
+    if (ptr == NULL) {
+        if (sram_tlsf && nsize <= HELD_LUA_SRAM_MAX_OBJ) {
+            void *p = tlsf_malloc(sram_tlsf, nsize);
+            if (p) return p;
+        }
         return tlsf_malloc(psram_tlsf, nsize);
+    }
+    if (in_sram_pool(ptr)) {
+        if (nsize <= HELD_LUA_SRAM_MAX_OBJ) {
+            void *p = tlsf_realloc(sram_tlsf, ptr, nsize);
+            if (p) return p;
+        }
+        // grows beyond the small-object limit or SRAM pool full -> move to PSRAM
+        void *p = tlsf_malloc(psram_tlsf, nsize);
+        if (!p) return NULL;
+        memcpy(p, ptr, osize < nsize ? osize : nsize);
+        tlsf_free(sram_tlsf, ptr);
+        return p;
+    }
     return tlsf_realloc(psram_tlsf, ptr, nsize);
+}
+
+// Carve the SRAM pool for the Lua allocator out of the C heap (after the LCD
+// framebuffers are allocated). Shrinks the request if the heap is short.
+static void setup_sram_pool(void) {
+    size_t want = (size_t)HELD_LUA_SRAM_POOL_KB * 1024;
+    while (want >= 16 * 1024) {
+        void *p = malloc(want);
+        if (p) {
+            sram_tlsf = tlsf_create_with_pool(p, want);
+            if (sram_tlsf) {
+                sram_pool_base = (uint8_t *)p;
+                sram_pool_size = want;
+                return;
+            }
+            free(p);
+        }
+        want /= 2;
+    }
 }
 
 // Walk callback to sum up free space
@@ -57,25 +110,31 @@ static void mem_walker(void* ptr, size_t size, int used, void* user) {
         stats->free_bytes += size;
 }
 
+// Usage of both Lua pools (PSRAM + SRAM small-object pool)
+static void lua_mem_stats(struct mem_stats *ps, struct mem_stats *ss) {
+    *ps = {0, 0};
+    *ss = {0, 0};
+    tlsf_walk_pool(tlsf_get_pool(psram_tlsf), mem_walker, ps);
+    if (sram_tlsf) tlsf_walk_pool(tlsf_get_pool(sram_tlsf), mem_walker, ss);
+}
+
 // --- sys library ---
 static int sys_memfree(lua_State *L) {
-    struct mem_stats stats = {0, 0};
-    pool_t pool = tlsf_get_pool(psram_tlsf);
-    tlsf_walk_pool(pool, mem_walker, &stats);
-    lua_pushinteger(L, (lua_Integer)stats.free_bytes);
+    struct mem_stats ps, ss;
+    lua_mem_stats(&ps, &ss);
+    lua_pushinteger(L, (lua_Integer)(ps.free_bytes + ss.free_bytes));
     return 1;
 }
 
 static int sys_memused(lua_State *L) {
-    struct mem_stats stats = {0, 0};
-    pool_t pool = tlsf_get_pool(psram_tlsf);
-    tlsf_walk_pool(pool, mem_walker, &stats);
-    lua_pushinteger(L, (lua_Integer)stats.used);
+    struct mem_stats ps, ss;
+    lua_mem_stats(&ps, &ss);
+    lua_pushinteger(L, (lua_Integer)(ps.used + ss.used));
     return 1;
 }
 
 static int sys_memtotal(lua_State *L) {
-    lua_pushinteger(L, (lua_Integer)psram_total_size);
+    lua_pushinteger(L, (lua_Integer)(psram_total_size + sram_pool_size));
     return 1;
 }
 
@@ -513,6 +572,15 @@ static int lua_info(lua_State *L) {
     const char *fmt = "wili8jam / pico held 2\nrp2350b @ %u mhz\npsram: %uk free / %uk\n";
     printf(fmt, mhz, fk, tk);
     p8_console_printf(fmt, mhz, fk, tk);
+    if (sram_tlsf) {
+        struct mem_stats ss = {0, 0};
+        tlsf_walk_pool(tlsf_get_pool(sram_tlsf), mem_walker, &ss);
+        printf("sram lua pool: %uk free / %uk (objects <= %u bytes)\n",
+               (unsigned)(ss.free_bytes / 1024), (unsigned)(sram_pool_size / 1024),
+               (unsigned)HELD_LUA_SRAM_MAX_OBJ);
+        p8_console_printf("sram: %uk free / %uk\n", (unsigned)(ss.free_bytes / 1024),
+                          (unsigned)(sram_pool_size / 1024));
+    }
 
     printf("psram: %u mhz, rx delay %u%s\n", (unsigned)(psram_tune_info.freq_hz / 1000000),
            (unsigned)psram_tune_info.rxdelay, psram_tune_info.ok ? "" : " (test failed)");
@@ -775,6 +843,10 @@ int main() {
         while (true) tight_loop_contents();
     }
     printf("TLSF heap ready.\n");
+
+    // SRAM pool for small Lua objects
+    setup_sram_pool();
+    printf("SRAM Lua pool: %u KB\n", (unsigned)(sram_pool_size / 1024));
 
     // Init PICO-8 preprocessor with PSRAM allocator
     p8_preprocess_init(psram_tlsf);

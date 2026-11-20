@@ -1765,9 +1765,12 @@ static int p8_dset(lua_State *L) {
 
 void p8_init(tlsf_t tlsf) {
     p8_tlsf = tlsf;
-    p8_mem = (uint8_t *)tlsf_malloc(tlsf, P8_MEM_SIZE);
-    if (p8_mem)
-        memset(p8_mem, 0, P8_MEM_SIZE);
+    // PICO-8 memory (sprites, map, flags, sfx, screen) lives in internal SRAM:
+    // every spr/map/pset/peek touches it, and in PSRAM it competed with code
+    // and the Lua heap for the 16 KB XIP cache (draw ~40 ms -> see perf stats).
+    static uint8_t p8_mem_sram[P8_MEM_SIZE] __attribute__((aligned(4)));
+    p8_mem = p8_mem_sram;
+    memset(p8_mem, 0, P8_MEM_SIZE);
 
     // Point gfx framebuffer at PICO-8 screen memory (0x6000-0x7FFF)
     // so that pset/pget and memcpy/peek/poke share the same buffer

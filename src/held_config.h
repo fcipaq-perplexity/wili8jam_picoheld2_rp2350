@@ -128,6 +128,17 @@
 #define HELD_CPU_BUS_PRIORITY   0
 #endif
 
+// Lua allocator: objects up to HELD_LUA_SRAM_MAX_OBJ bytes are placed in an
+// internal-SRAM pool of HELD_LUA_SRAM_POOL_KB (taken from the C heap after
+// the LCD framebuffers), everything else / the overflow goes to PSRAM.
+// (128 KB leaves ~80 KB of C heap with HELD_HOT_CODE_IN_RAM, see CMakeLists)
+#ifndef HELD_LUA_SRAM_POOL_KB
+#define HELD_LUA_SRAM_POOL_KB 128
+#endif
+#ifndef HELD_LUA_SRAM_MAX_OBJ
+#define HELD_LUA_SRAM_MAX_OBJ 512
+#endif
+
 // Backlight at boot, 5..100
 #ifndef HELD_BACKLIGHT_DEFAULT
 #define HELD_BACKLIGHT_DEFAULT 50
