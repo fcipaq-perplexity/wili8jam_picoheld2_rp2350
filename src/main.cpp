@@ -46,6 +46,13 @@ static inline bool in_sram_pool(void *p) {
            (uint8_t *)p < sram_pool_base + sram_pool_size;
 }
 
+// While set (lua_pin.c), allocations of any size prefer SRAM
+static bool alloc_prefer_sram = false;
+
+extern "C" void lua_alloc_prefer_sram(int on) {
+    alloc_prefer_sram = on != 0;
+}
+
 static void* lua_psram_alloc(void* ud, void* ptr, size_t osize, size_t nsize) {
     (void)ud;
     if (nsize == 0) {
@@ -54,6 +61,26 @@ static void* lua_psram_alloc(void* ud, void* ptr, size_t osize, size_t nsize) {
             else tlsf_free(psram_tlsf, ptr);
         }
         return NULL;
+    }
+    if (alloc_prefer_sram && sram_tlsf) {
+        if (ptr == NULL) {
+            void *p = tlsf_malloc(sram_tlsf, nsize);
+            if (p) return p;
+            return tlsf_malloc(psram_tlsf, nsize);
+        }
+        if (in_sram_pool(ptr)) {
+            void *p = tlsf_realloc(sram_tlsf, ptr, nsize);
+            if (p) return p;
+        } else {
+            void *p = tlsf_malloc(sram_tlsf, nsize);
+            if (p) {
+                memcpy(p, ptr, osize < nsize ? osize : nsize);
+                tlsf_free(psram_tlsf, ptr);
+                return p;
+            }
+            return tlsf_realloc(psram_tlsf, ptr, nsize);
+        }
+        // SRAM full: fall through to the normal policy
     }
     if (ptr == NULL) {
         if (sram_tlsf && nsize <= HELD_LUA_SRAM_MAX_OBJ) {

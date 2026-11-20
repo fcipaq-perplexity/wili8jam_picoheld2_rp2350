@@ -133,6 +133,7 @@ add_executable(wili8jam
     src/main.cpp
     src/held_hw.cpp
     src/held_prof.c
+    src/lua_pin.c
     src/sdcard.c
     src/gfx.c
     src/input.c
@@ -191,8 +192,9 @@ if(HELD_HOT_CODE_IN_RAM)
         "*liblua54.a:lvm.c.o *liblua54.a:ltable.c.o *liblua54.a:lgc.c.o"
         "*liblua54.a:ldo.c.o *liblua54.a:lfunc.c.o *liblua54.a:lstring.c.o"
         "*liblua54.a:ltm.c.o *liblua54.a:lapi.c.o *liblua54.a:lauxlib.c.o"
-        "*liblua54.a:lobject.c.o *libtlsf.a:tlsf.c.o"
-        "*gfx.c.o *p8_api.c.o *held_hw.cpp.o *libpicoengine_hw.a:lcd_dpi.cpp.o")
+        "*liblua54.a:lobject.c.o *libtlsf.a:tlsf.c.o *lua_pin.c.o"
+        "*gfx.c.o *p8_api.c.o *held_hw.cpp.o *libpicoengine_hw.a:lcd_dpi.cpp.o"
+        "*double_aeabi_dcp.S.o *double_conv_m33.S.o")
     string(JOIN " " HOT_OBJS ${HOT_OBJS})
     set(SDK_LD ${PICO_SDK_PATH}/src/rp2_common/pico_crt0/rp2350/memmap_default.ld)
     file(READ ${SDK_LD} LD_TEXT)

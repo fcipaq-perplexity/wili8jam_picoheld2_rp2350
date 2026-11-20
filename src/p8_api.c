@@ -480,19 +480,41 @@ static int p8_spr(lua_State *L) {
     int sx = (n % 16) * 8;
     int sy = (n / 16) * 8;
 
-    for (int py = 0; py < ph; py++) {
-        for (int px = 0; px < pw; px++) {
+    // Screen position after camera; clip the sprite rectangle once against
+    // the clip rect and the screen instead of testing every pixel.
+    int x0 = dx - p8_camera_x, y0 = dy - p8_camera_y;
+    int cx0 = p8_clip_x < 0 ? 0 : p8_clip_x;
+    int cy0 = p8_clip_y < 0 ? 0 : p8_clip_y;
+    int cx1 = p8_clip_x + p8_clip_w; if (cx1 > 128) cx1 = 128;
+    int cy1 = p8_clip_y + p8_clip_h; if (cy1 > 128) cy1 = 128;
+    int px_start = cx0 - x0 > 0 ? cx0 - x0 : 0;
+    int px_end   = cx1 - x0 < pw ? cx1 - x0 : pw;
+    int py_start = cy0 - y0 > 0 ? cy0 - y0 : 0;
+    int py_end   = cy1 - y0 < ph ? cy1 - y0 : ph;
+    if (px_start >= px_end || py_start >= py_end) return 0;
+
+    uint8_t *fb = gfx_get_fb();
+    const uint16_t palt = p8_palt_mask;
+    const bool fill = (p8_fill_pattern != 0);
+
+    for (int py = py_start; py < py_end; py++) {
+        int src_y = sy + (flip_y ? (ph - 1 - py) : py);
+        if (src_y < 0 || src_y >= 128) continue;
+        const uint8_t *srow = p8_mem + src_y * 64;
+        int y = y0 + py;
+        uint8_t *drow = fb + y * 64;
+        for (int px = px_start; px < px_end; px++) {
             int src_x = sx + (flip_x ? (pw - 1 - px) : px);
-            int src_y = sy + (flip_y ? (ph - 1 - py) : py);
-            // Read pixel from sprite sheet in virtual memory
-            // Sprite sheet: 2 pixels per byte, row-major, 64 bytes per row
-            if (src_x < 0 || src_x >= 128 || src_y < 0 || src_y >= 128) continue;
-            int addr = (src_y * 64) + (src_x / 2);
-            uint8_t byte = p8_mem[addr];
-            int c = (src_x & 1) ? ((byte >> 4) & 0xF) : (byte & 0xF);
-            // Check transparency
-            if (p8_palt_mask & (1 << c)) continue;
-            p8_pixel(dx + px, dy + py, c);
+            if (src_x < 0 || src_x >= 128) continue;
+            uint8_t byte = srow[src_x >> 1];
+            int c = (src_x & 1) ? (byte >> 4) : (byte & 0xF);
+            if (palt & (1 << c)) continue;          // transparency (before pal)
+            int x = x0 + px;
+            if (fill && p8_fill_check(x, y)) continue;
+            c = p8_draw_pal[c] & 0xF;
+            uint8_t *d = drow + (x >> 1);
+            if (x & 1) *d = (uint8_t)((*d & 0x0F) | (c << 4));
+            else       *d = (uint8_t)((*d & 0xF0) | c);
         }
     }
     return 0;
@@ -754,7 +776,7 @@ static int p8_srand(lua_State *L) {
 // add(t, v, [i]) — insert v into table t
 static int p8_add(lua_State *L) {
     luaL_checktype(L, 1, LUA_TTABLE);
-    int n = (int)luaL_len(L, 1);
+    int n = (int)lua_rawlen(L, 1);
     if (lua_isnoneornil(L, 3)) {
         // Append
         lua_pushvalue(L, 2);
@@ -776,7 +798,7 @@ static int p8_add(lua_State *L) {
 // del(t, v) — delete first occurrence of v
 static int p8_del(lua_State *L) {
     luaL_checktype(L, 1, LUA_TTABLE);
-    int n = (int)luaL_len(L, 1);
+    int n = (int)lua_rawlen(L, 1);
     for (int i = 1; i <= n; i++) {
         lua_rawgeti(L, 1, i);
         if (lua_rawequal(L, -1, 2)) {
@@ -799,7 +821,7 @@ static int p8_del(lua_State *L) {
 // deli(t, [i]) — delete by index
 static int p8_deli(lua_State *L) {
     luaL_checktype(L, 1, LUA_TTABLE);
-    int n = (int)luaL_len(L, 1);
+    int n = (int)lua_rawlen(L, 1);
     int i = (int)luaL_optinteger(L, 2, n);
     if (i < 1 || i > n) return 0;
     lua_rawgeti(L, 1, i); // return value
@@ -815,7 +837,7 @@ static int p8_deli(lua_State *L) {
 // count(t, [v]) — count elements or occurrences
 static int p8_count(lua_State *L) {
     luaL_checktype(L, 1, LUA_TTABLE);
-    int n = (int)luaL_len(L, 1);
+    int n = (int)lua_rawlen(L, 1);
     if (lua_isnoneornil(L, 2)) {
         lua_pushinteger(L, n);
         return 1;
@@ -834,7 +856,7 @@ static int p8_count(lua_State *L) {
 // Returns an iterator function that captures the table and an index upvalue
 static int p8_all_iter(lua_State *L) {
     int i = (int)lua_tointeger(L, lua_upvalueindex(2));
-    int n = (int)luaL_len(L, lua_upvalueindex(1));
+    int n = (int)lua_rawlen(L, lua_upvalueindex(1));
     i++;
     if (i > n) return 0;
     lua_pushinteger(L, i);
@@ -856,7 +878,7 @@ static int p8_foreach(lua_State *L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     luaL_checktype(L, 2, LUA_TFUNCTION);
     int i = 1;
-    while (i <= (int)luaL_len(L, 1)) {
+    while (i <= (int)lua_rawlen(L, 1)) {
         lua_pushvalue(L, 2);
         lua_rawgeti(L, 1, i);
         lua_call(L, 1, 0);

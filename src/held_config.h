@@ -135,9 +135,10 @@
 // Lua allocator: objects up to HELD_LUA_SRAM_MAX_OBJ bytes are placed in an
 // internal-SRAM pool of HELD_LUA_SRAM_POOL_KB (taken from the C heap after
 // the LCD framebuffers), everything else / the overflow goes to PSRAM.
-// (128 KB leaves ~80 KB of C heap with HELD_HOT_CODE_IN_RAM, see CMakeLists)
+// (144 KB leaves ~19 KB of C heap with HELD_HOT_CODE_IN_RAM; at runtime only
+// FatFS's long file name buffer (~0.5 KB) comes from the C heap)
 #ifndef HELD_LUA_SRAM_POOL_KB
-#define HELD_LUA_SRAM_POOL_KB 128
+#define HELD_LUA_SRAM_POOL_KB 144
 #endif
 // 2048: the Lua stack and the bytecode / constant arrays of most functions
 // (read for every executed instruction) fit and land in SRAM.

@@ -16,6 +16,7 @@
 #include "audio.h"
 #include "held_hw.h"
 #include "held_prof.h"
+#include "lua_pin.h"
 #include "hardware/structs/xip_ctrl.h"
 
 void lua_pool_usage(uint32_t *sram_used, uint32_t *sram_size, uint32_t *psram_used);
@@ -557,6 +558,8 @@ void p8_cart_gameloop(lua_State *L) {
         p8_set_gameloop_mode(false);
         return;
     }
+    // globals are defined now: move the hot Lua structures into SRAM
+    lua_pin_hot_to_sram(L);
     cart_gameloop_inner(L);
 }
 
