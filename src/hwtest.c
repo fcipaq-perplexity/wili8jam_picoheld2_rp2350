@@ -81,8 +81,8 @@ static void draw_pattern(uint32_t frame) {
     snprintf(buf, sizeof(buf), "pad lr%4d ud%4d l%4d", raw[HELD_RAW_DPAD_LR],
              raw[HELD_RAW_DPAD_UD], raw[HELD_RAW_L]);
     gfx_print(buf, 8, 78, 6);
-    snprintf(buf, sizeof(buf), "stk x%4d y%4d sw%4d", raw[HELD_RAW_STICK_X],
-             raw[HELD_RAW_STICK_Y], raw[HELD_RAW_STICK_SW]);
+    snprintf(buf, sizeof(buf), "stick x%4d y%4d", raw[HELD_RAW_STICK_X],
+             raw[HELD_RAW_STICK_Y]);
     gfx_print(buf, 8, 85, 6);
     snprintf(buf, sizeof(buf), "bat %d%% %s  bl %d", held_battery_level(),
              held_on_external_power() ? "usb" : "", held_backlight_get());
@@ -129,11 +129,11 @@ int main(void) {
             int raw[HELD_RAW_COUNT];
             held_buttons_raw(raw);
             printf("hwtest: lcd=%d  %lu fps  buttons=0x%04lx  bat=%d%%  "
-                   "adc lr=%d ud=%d l=%d stick x=%d y=%d sw=%d\n", err,
+                   "adc lr=%d ud=%d l=%d stick x=%d y=%d\n", err,
                    (unsigned long)((frame - frames_last) * 1000 / (now - t_last)),
                    (unsigned long)input_raw_buttons(), held_battery_level(),
                    raw[HELD_RAW_DPAD_LR], raw[HELD_RAW_DPAD_UD], raw[HELD_RAW_L],
-                   raw[HELD_RAW_STICK_X], raw[HELD_RAW_STICK_Y], raw[HELD_RAW_STICK_SW]);
+                   raw[HELD_RAW_STICK_X], raw[HELD_RAW_STICK_Y]);
             t_last = now;
             frames_last = frame;
         }

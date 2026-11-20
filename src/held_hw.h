@@ -54,11 +54,15 @@ uint32_t held_buttons_poll(void);
 #define HELD_RAW_DPAD_LR  0
 #define HELD_RAW_DPAD_UD  1
 #define HELD_RAW_L        2
-#define HELD_RAW_STICK_SW 3
-#define HELD_RAW_STICK_X  4
-#define HELD_RAW_STICK_Y  5
-#define HELD_RAW_COUNT    6
+#define HELD_RAW_STICK_X  3
+#define HELD_RAW_STICK_Y  4
+#define HELD_RAW_COUNT    5
 void held_buttons_raw(int out[HELD_RAW_COUNT]);
+
+// D-pad ADC thresholds (defaults: held_config.h). Order: left max, right min,
+// up max, down min.
+void held_dpad_set_thresholds(int left_max, int right_min, int up_max, int down_min);
+void held_dpad_get_thresholds(int out[4]);
 
 // --- LCD -----------------------------------------------------------------
 
@@ -85,7 +89,7 @@ uint32_t held_lcd_frames_dropped(void);
 void held_lcd_set_scale_mode(int mode);
 int  held_lcd_get_scale_mode(void);
 
-// Backlight 5..100 (default HELD_BACKLIGHT_DEFAULT = 50)
+// Backlight 5..100 (default HELD_BACKLIGHT_DEFAULT, see held_config.h)
 void held_backlight_set(int level);
 int  held_backlight_get(void);
 

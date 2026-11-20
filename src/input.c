@@ -189,15 +189,35 @@ static int l_debug(lua_State *L) {
         if (b & (1u << i)) printf(" %s", names[i]);
     int raw[HELD_RAW_COUNT];
     held_buttons_raw(raw);
-    printf("\nadc: dpad lr=%d ud=%d  l=%d  stick x=%d y=%d sw=%d\n",
+    printf("\nadc: dpad lr=%d ud=%d  l=%d  stick x=%d y=%d\n",
            raw[HELD_RAW_DPAD_LR], raw[HELD_RAW_DPAD_UD], raw[HELD_RAW_L],
-           raw[HELD_RAW_STICK_X], raw[HELD_RAW_STICK_Y], raw[HELD_RAW_STICK_SW]);
+           raw[HELD_RAW_STICK_X], raw[HELD_RAW_STICK_Y]);
     printf("battery: %d%% (%s)\n", held_battery_level(),
            held_on_external_power() ? "usb" : "battery");
     return 0;
 }
 
+// input.dpad()                         -> print thresholds + live raw values
+// input.dpad(left_max, right_min, up_max, down_min) -> set thresholds
+// Returns the four current thresholds.
+static int l_dpad(lua_State *L) {
+    int t[4];
+    if (lua_gettop(L) >= 4) {
+        held_dpad_set_thresholds((int)luaL_checkinteger(L, 1), (int)luaL_checkinteger(L, 2),
+                                 (int)luaL_checkinteger(L, 3), (int)luaL_checkinteger(L, 4));
+    }
+    held_dpad_get_thresholds(t);
+    held_buttons_poll();
+    int raw[HELD_RAW_COUNT];
+    held_buttons_raw(raw);
+    printf("dpad thresholds: left<%d right>%d up<%d down>%d   (now lr=%d ud=%d)\n",
+           t[0], t[1], t[2], t[3], raw[HELD_RAW_DPAD_LR], raw[HELD_RAW_DPAD_UD]);
+    for (int i = 0; i < 4; i++) lua_pushinteger(L, t[i]);
+    return 4;
+}
+
 static const luaL_Reg inputlib[] = {
+    {"dpad",   l_dpad},
     {"btn",    l_btn},
     {"btnp",   l_btnp},
     {"key",    l_key},

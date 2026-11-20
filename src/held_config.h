@@ -1,0 +1,84 @@
+/*
+ * Pico Held 2 tuning knobs for wili8jam.
+ *
+ * Everything here can be overridden from CMake, e.g.
+ *   target_compile_definitions(wili8jam PRIVATE HELD_DPAD_RIGHT_MIN=2300)
+ * The D-pad thresholds can also be changed at runtime from the REPL:
+ *   input.dpad()                      -- print current values + raw ADC
+ *   input.dpad(1150, 2250, 1600, 2750) -- left max, right min, up max, down min
+ */
+#ifndef HELD_CONFIG_H
+#define HELD_CONFIG_H
+
+/* ---------------------------------------------------------------------------
+ * D-pad (one ADC channel per axis, voltage divider, 12 bit: 0..4095)
+ *
+ * Measured (Pico Held 2 v1.5):
+ *   LR axis: left ~300,  idle ~2000, right ~2500
+ *   UD axis: up   ~1200, idle ~2000, down  ~3500
+ * Defaults are the midpoints between idle and pressed. Moving a threshold
+ * towards idle makes the direction more sensitive (and diagonals register
+ * more easily); moving it towards the pressed value makes it stricter.
+ * ------------------------------------------------------------------------- */
+#ifndef HELD_DPAD_LEFT_MAX
+#define HELD_DPAD_LEFT_MAX   1150   // LR below this: LEFT
+#endif
+#ifndef HELD_DPAD_RIGHT_MIN
+#define HELD_DPAD_RIGHT_MIN  2250   // LR above this: RIGHT
+#endif
+#ifndef HELD_DPAD_UP_MAX
+#define HELD_DPAD_UP_MAX     1600   // UD below this: UP
+#endif
+#ifndef HELD_DPAD_DOWN_MIN
+#define HELD_DPAD_DOWN_MIN   2750   // UD above this: DOWN
+#endif
+
+// L shoulder button (analog pin with pull-up): pressed below this
+#ifndef HELD_BTN_L_MAX
+#define HELD_BTN_L_MAX        500
+#endif
+
+/* ---------------------------------------------------------------------------
+ * SELECT glitch filter: SELECT only counts as pressed after this many
+ * consecutive pressed samples (one sample per input poll, i.e. per frame).
+ * 1 = no filtering.
+ * ------------------------------------------------------------------------- */
+#ifndef HELD_SEL_CONSECUTIVE
+#define HELD_SEL_CONSECUTIVE    3
+#endif
+
+/* ---------------------------------------------------------------------------
+ * Analog stick as additional D-pad (off until range/direction are verified)
+ * ------------------------------------------------------------------------- */
+#ifndef HELD_USE_ANALOG_STICK
+#define HELD_USE_ANALOG_STICK   0
+#endif
+#ifndef HELD_STICK_THRESHOLD
+#define HELD_STICK_THRESHOLD  700   // deflection from the boot-time centre
+#endif
+#ifndef HELD_STICK_INVERT_X
+#define HELD_STICK_INVERT_X     1
+#endif
+#ifndef HELD_STICK_INVERT_Y
+#define HELD_STICK_INVERT_Y     0
+#endif
+
+/* ---------------------------------------------------------------------------
+ * Display / system
+ * ------------------------------------------------------------------------- */
+// LCD framebuffers (240x240x8bit = 57.6 KB each): 2 = double buffered, 1 = single
+#ifndef HELD_LCD_NUM_FB
+#define HELD_LCD_NUM_FB         2
+#endif
+
+// Backlight at boot, 5..100
+#ifndef HELD_BACKLIGHT_DEFAULT
+#define HELD_BACKLIGHT_DEFAULT 50
+#endif
+
+// System clock in kHz (normally set via the CMake cache variable)
+#ifndef HELD_SYS_CLOCK_KHZ
+#define HELD_SYS_CLOCK_KHZ 252000
+#endif
+
+#endif // HELD_CONFIG_H

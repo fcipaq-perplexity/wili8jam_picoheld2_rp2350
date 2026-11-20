@@ -26,37 +26,7 @@
 #error "wili8jam needs the Pico Engine LCD in 8 bit (CLUT) mode, see picoengine/src/setup.h"
 #endif
 
-// Number of LCD framebuffers (240x240x8bit = 57.6 KB each, internal SRAM).
-// 2 = tear-free double buffering, 1 = single buffer (saves RAM, may tear).
-#ifndef HELD_LCD_NUM_FB
-#define HELD_LCD_NUM_FB 2
-#endif
-
-// Analog stick as additional D-pad. Off by default until its range/direction
-// has been checked on the device (see the raw values in picoheld2_hwtest).
-#ifndef HELD_USE_ANALOG_STICK
-#define HELD_USE_ANALOG_STICK 0
-#endif
-#ifndef HELD_STICK_THRESHOLD
-#define HELD_STICK_THRESHOLD 700   // of 4096 ADC counts
-#endif
-#ifndef HELD_STICK_INVERT_X
-#define HELD_STICK_INVERT_X 1
-#endif
-#ifndef HELD_STICK_INVERT_Y
-#define HELD_STICK_INVERT_Y 0
-#endif
-
-// D-pad: one ADC channel per axis with a voltage divider (thresholds as in
-// the Pico Engine BUTTON_MAP in hwcfg.h)
-#define DPAD_LOW_MAX    1450   // below: LEFT / UP
-#define DPAD_HIGH_MIN   2250   // above: RIGHT / DOWN
-#define ANALOG_BTN_MAX   500   // L and stick switch: pressed below this
-
-// Default backlight (0..100)
-#ifndef HELD_BACKLIGHT_DEFAULT
-#define HELD_BACKLIGHT_DEFAULT 50
-#endif
+#include "held_config.h"
 
 #define LCD_W 240
 #define LCD_H 240
@@ -68,6 +38,28 @@
 // ---------------------------------------------------------------------------
 
 static int stick_x0 = 2048, stick_y0 = 2048;
+
+// D-pad thresholds (runtime adjustable, defaults in held_config.h)
+static int dpad_left_max  = HELD_DPAD_LEFT_MAX;
+static int dpad_right_min = HELD_DPAD_RIGHT_MIN;
+static int dpad_up_max    = HELD_DPAD_UP_MAX;
+static int dpad_down_min  = HELD_DPAD_DOWN_MIN;
+
+static int sel_consec_cnt = 0;
+
+void held_dpad_set_thresholds(int left_max, int right_min, int up_max, int down_min) {
+    dpad_left_max = left_max;
+    dpad_right_min = right_min;
+    dpad_up_max = up_max;
+    dpad_down_min = down_min;
+}
+
+void held_dpad_get_thresholds(int out[4]) {
+    out[0] = dpad_left_max;
+    out[1] = dpad_right_min;
+    out[2] = dpad_up_max;
+    out[3] = dpad_down_min;
+}
 static int raw_adc[HELD_RAW_COUNT];
 
 // The RP2350 ADC has one sample capacitor for all channels: right after
@@ -102,14 +94,15 @@ void held_hw_early_init(void) {
     gpio_set_pulls(PIN_BTN_ST, false, true);
     gpio_set_input_enabled(PIN_BTN_ST, false);
 
+    // stick switch: digital, active low (hwcfg.h lists it as analog)
+    gpio_init(PIN_BTN_SW);
+    gpio_set_dir(PIN_BTN_SW, GPIO_IN);
+    gpio_set_pulls(PIN_BTN_SW, true, false);
+
     // analog stick centre
     stick_x0 = adc_read_settled(PIN_ANALOG_X);
     stick_y0 = adc_read_settled(PIN_ANALOG_Y);
 }
-
-#ifndef HELD_SYS_CLOCK_KHZ
-#define HELD_SYS_CLOCK_KHZ 252000
-#endif
 
 void held_set_sys_clock(void) {
     vreg_set_voltage(VREG_VOLTAGE_1_30);
@@ -156,25 +149,30 @@ uint32_t held_buttons_poll(void) {
     if (!gpio_get(PIN_BTN_X))   b |= HELD_BTN_X;
     if (!gpio_get(PIN_BTN_Y))   b |= HELD_BTN_Y;
     if (!gpio_get(PIN_BTN_R))   b |= HELD_BTN_R;
-    if (!gpio_get(PIN_BTN_SEL)) b |= HELD_BTN_SELECT;
+    if (!gpio_get(PIN_BTN_SW))  b |= HELD_BTN_STICK;
     if (read_start_button())    b |= HELD_BTN_START;
 
-    // analog
+    // SELECT glitches: only accept it after HELD_SEL_CONSECUTIVE pressed samples
+    if (!gpio_get(PIN_BTN_SEL)) {
+        if (sel_consec_cnt < HELD_SEL_CONSECUTIVE) sel_consec_cnt++;
+    } else {
+        sel_consec_cnt = 0;
+    }
+    if (sel_consec_cnt >= HELD_SEL_CONSECUTIVE) b |= HELD_BTN_SELECT;
+
+    // analog: D-pad axes (voltage dividers) and L
     int lr = adc_read_settled(PIN_DPAD_LR);
     int ud = adc_read_settled(PIN_DPAD_UD);
     int l  = adc_read_settled(PIN_BTN_L);
-    int sw = adc_read_settled(PIN_BTN_SW);
     raw_adc[HELD_RAW_DPAD_LR] = lr;
     raw_adc[HELD_RAW_DPAD_UD] = ud;
     raw_adc[HELD_RAW_L] = l;
-    raw_adc[HELD_RAW_STICK_SW] = sw;
 
-    if (lr < DPAD_LOW_MAX)  b |= HELD_BTN_LEFT;
-    if (lr > DPAD_HIGH_MIN) b |= HELD_BTN_RIGHT;
-    if (ud < DPAD_LOW_MAX)  b |= HELD_BTN_UP;
-    if (ud > DPAD_HIGH_MIN) b |= HELD_BTN_DOWN;
-    if (l  < ANALOG_BTN_MAX) b |= HELD_BTN_L;
-    if (sw < ANALOG_BTN_MAX) b |= HELD_BTN_STICK;
+    if (lr < dpad_left_max)  b |= HELD_BTN_LEFT;
+    if (lr > dpad_right_min) b |= HELD_BTN_RIGHT;
+    if (ud < dpad_up_max)    b |= HELD_BTN_UP;
+    if (ud > dpad_down_min)  b |= HELD_BTN_DOWN;
+    if (l  < HELD_BTN_L_MAX) b |= HELD_BTN_L;
 
     int sx = adc_read_settled(PIN_ANALOG_X);
     int sy = adc_read_settled(PIN_ANALOG_Y);
