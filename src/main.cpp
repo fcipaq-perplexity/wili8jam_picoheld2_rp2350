@@ -665,12 +665,10 @@ int main() {
     // as soon as the power button is released.
     held_hw_early_init();
 
-    // Overclock to 252 MHz (2x default). VCO=1260MHz (12*105), postdiv 5/1.
-    // Requires 1.3V core voltage. Must happen BEFORE the LCD, audio and PSRAM
-    // are set up: their PIO / QMI clock dividers are derived from clk_sys.
-    vreg_set_voltage(VREG_VOLTAGE_1_30);
-    sleep_ms(10); // let voltage stabilize
-    set_sys_clock_pll(1260000000, 5, 1); // VCO=1260MHz, postdiv1=5, postdiv2=1 → 252MHz
+    // Overclock (252 MHz default, 1.3 V; build option HELD_SYS_CLOCK_KHZ).
+    // Must happen BEFORE the LCD, audio and PSRAM are set up: their PIO / QMI
+    // clock dividers are derived from clk_sys.
+    held_set_sys_clock();
 
     // USB CDC serial: debug output + Lua REPL
     stdio_init_all();

@@ -13,6 +13,10 @@ set(PICO_BOARD picoheld_2 CACHE STRING "Board type")
 set(PICOHELD2_HW_VARIANT 0 CACHE STRING "Pico Held 2 hardware variant (0 = v1.5 SunmaxIC, 1 = v1.4 Buydisplay)")
 set_property(CACHE PICOHELD2_HW_VARIANT PROPERTY STRINGS 0 1)
 
+# System clock in kHz (252000 = exact 252 MHz PLL setting; e.g. 300000 for a
+# faster LCD refresh - the DPI scanout is DMA bound and scales with clk_sys)
+set(HELD_SYS_CLOCK_KHZ 252000 CACHE STRING "System clock in kHz")
+
 if(WIN32)
     set(USERHOME $ENV{USERPROFILE})
 else()
@@ -36,6 +40,7 @@ pico_sdk_init()
 add_compile_definitions(
     PICOHELD2_HW_VARIANT=${PICOHELD2_HW_VARIANT}
     PE_CONFIG_NO=${PICOHELD2_HW_VARIANT}
+    HELD_SYS_CLOCK_KHZ=${HELD_SYS_CLOCK_KHZ}
 )
 
 # --- Lua 5.4.7 static library ---

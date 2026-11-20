@@ -19,6 +19,11 @@ extern "C" {
 // Latch the power switch, set up buttons + ADC. Call as early as possible.
 void held_hw_early_init(void);
 
+// Core voltage + system clock (HELD_SYS_CLOCK_KHZ, default 252000).
+// Call before the LCD, audio and PSRAM are set up: their clock dividers
+// are derived from clk_sys.
+void held_set_sys_clock(void);
+
 // Cut power (does not return when on battery).
 void held_power_off(void);
 
@@ -45,6 +50,16 @@ bool held_on_external_power(void);
 // Sample all buttons (D-pad + analog stick both report as directions).
 uint32_t held_buttons_poll(void);
 
+// Raw ADC values (0..4095) of the last held_buttons_poll(), for debugging
+#define HELD_RAW_DPAD_LR  0
+#define HELD_RAW_DPAD_UD  1
+#define HELD_RAW_L        2
+#define HELD_RAW_STICK_SW 3
+#define HELD_RAW_STICK_X  4
+#define HELD_RAW_STICK_Y  5
+#define HELD_RAW_COUNT    6
+void held_buttons_raw(int out[HELD_RAW_COUNT]);
+
 // --- LCD -----------------------------------------------------------------
 
 // Scaling of the 128x128 PICO-8 screen onto the 240x240 LCD framebuffer
@@ -62,11 +77,17 @@ int  held_lcd_init(void);
 // May block until the next vblank if no back buffer is free.
 void held_lcd_present(const uint8_t *fb4, const uint8_t *disp_pal, const uint16_t *pal565);
 
+// Frame drop mode (used by the cart game loop): if no back buffer is free,
+// held_lcd_present() skips the frame instead of waiting for the next vblank.
+void held_lcd_set_frame_drop(bool enable);
+uint32_t held_lcd_frames_dropped(void);
+
 void held_lcd_set_scale_mode(int mode);
 int  held_lcd_get_scale_mode(void);
 
-// Backlight 0..100
+// Backlight 5..100 (default HELD_BACKLIGHT_DEFAULT = 50)
 void held_backlight_set(int level);
+int  held_backlight_get(void);
 
 #ifdef __cplusplus
 }

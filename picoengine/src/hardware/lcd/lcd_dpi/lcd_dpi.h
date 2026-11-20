@@ -145,6 +145,9 @@ class LCD_DPI : public LCD
     lcd_error_t get_fb(gbuffer_t* lcd_buffer) override;
     bool is_ready() override;
 
+    // true if get_backbuffer() would return without waiting for a vblank
+    bool is_backbuffer_free();
+
 };
 
 // setup

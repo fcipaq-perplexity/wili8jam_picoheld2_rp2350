@@ -36,13 +36,14 @@ The hardware drivers in `picoengine/` are the Pico Engine library (LCD, buttons,
 
 | Button | PICO-8 / function |
 |-|-|
-| D-pad / analog stick | ⬅️ ➡️ ⬆️ ⬇️ |
+| D-pad | ⬅️ ➡️ ⬆️ ⬇️ (analog stick optional, see `HELD_USE_ANALOG_STICK`) |
 | A | 🅾️ (O) |
 | B | ❎ (X) |
 | START | pause/menu button (`btn(6)`) |
 | SELECT + START | exit the cart, back to the cart picker (also leaves the REPL) |
 | SELECT + L | toggle screen scaling: crop (2x) / fit (1.875x) |
 | SELECT + UP / DOWN | volume |
+| SELECT + LEFT / RIGHT | backlight |
 | hold R (2 s) | power off |
 | SELECT while powering on | USB bootloader (hard-wired to BOOTSEL) |
 
@@ -68,13 +69,14 @@ Options:
 
 - `-DPICOHELD2_HW_VARIANT=0` -- Pico Held 2 v1.5, SunmaxIC panel (default)
 - `-DPICOHELD2_HW_VARIANT=1` -- Pico Held 2 v1.4, Buydisplay panel
+- `-DHELD_SYS_CLOCK_KHZ=252000` -- system clock (default 252 MHz). The LCD scanout is DMA bound, so the panel refresh scales with it (about 44 Hz at 252 MHz). In the game loop frames are dropped rather than slowing a cart down.
 
 Outputs:
 
 - `build/wili8jam.uf2` -- the console
-- `build/picoheld2_hwtest.uf2` -- hardware bring-up test: colour bars, crop/fit frame markers, orientation marker, live button display, A/B play test sounds
+- `build/picoheld2_hwtest.uf2` -- hardware bring-up test: colour bars, crop/fit frame markers, orientation marker, live button display with raw ADC values (D-pad axes, L, stick), A/B play test sounds
 
-Compile-time knobs (add with `target_compile_definitions`): `HELD_LCD_NUM_FB` (2 = double buffering, 1 = single buffer, less RAM, may tear), `HELD_USE_ANALOG_STICK`, `HELD_STICK_INVERT_X/Y`, `HELD_STICK_THRESHOLD`, `PSRAM_MAX_FREQ_HZ` (default 84 MHz; 63000000 if PSRAM is flaky).
+Compile-time knobs (add with `target_compile_definitions`): `HELD_LCD_NUM_FB` (2 = double buffering, 1 = single buffer, less RAM, may tear), `HELD_BACKLIGHT_DEFAULT` (50), `HELD_USE_ANALOG_STICK` (0; stick as extra D-pad), `HELD_STICK_INVERT_X/Y`, `HELD_STICK_THRESHOLD`, `PSRAM_MAX_FREQ_HZ` (default 84 MHz; 63000000 if PSRAM is flaky).
 
 ### Flash
 

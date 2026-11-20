@@ -9,6 +9,9 @@
 #include "pico/stdlib.h"
 #include "hardware/watchdog.h"
 #include "hardware/clocks.h"
+#include "hardware/adc.h"
+#include "hardware/gpio.h"
+#include "hardware/vreg.h"
 
 // Pico Engine (picoengine/src) - individual headers on purpose: picoengine.h
 // defines pe_init() in the header, which breaks when included more than once.
@@ -29,20 +32,30 @@
 #define HELD_LCD_NUM_FB 2
 #endif
 
-// Analog stick as additional D-pad
+// Analog stick as additional D-pad. Off by default until its range/direction
+// has been checked on the device (see the raw values in picoheld2_hwtest).
 #ifndef HELD_USE_ANALOG_STICK
-#define HELD_USE_ANALOG_STICK 1
+#define HELD_USE_ANALOG_STICK 0
 #endif
 #ifndef HELD_STICK_THRESHOLD
 #define HELD_STICK_THRESHOLD 700   // of 4096 ADC counts
 #endif
-// Direction convention taken from the Pico Engine's original stick code:
-// X above centre = left, Y below centre = up. Flip here if it's mirrored.
 #ifndef HELD_STICK_INVERT_X
 #define HELD_STICK_INVERT_X 1
 #endif
 #ifndef HELD_STICK_INVERT_Y
 #define HELD_STICK_INVERT_Y 0
+#endif
+
+// D-pad: one ADC channel per axis with a voltage divider (thresholds as in
+// the Pico Engine BUTTON_MAP in hwcfg.h)
+#define DPAD_LOW_MAX    1450   // below: LEFT / UP
+#define DPAD_HIGH_MIN   2250   // above: RIGHT / DOWN
+#define ANALOG_BTN_MAX   500   // L and stick switch: pressed below this
+
+// Default backlight (0..100)
+#ifndef HELD_BACKLIGHT_DEFAULT
+#define HELD_BACKLIGHT_DEFAULT 50
 #endif
 
 #define LCD_W 240
@@ -54,20 +67,62 @@
 // Power / buttons
 // ---------------------------------------------------------------------------
 
-static int stick_x0, stick_y0;
+static int stick_x0 = 2048, stick_y0 = 2048;
+static int raw_adc[HELD_RAW_COUNT];
+
+// The RP2350 ADC has one sample capacitor for all channels: right after
+// switching channels it still holds (part of) the previous channel's voltage,
+// which matters for the high-impedance D-pad dividers. Throw away two
+// conversions after the switch, then average two.
+static int adc_read_settled(int gpio) {
+    adc_select_input(gpio - ADC_PIN_OFFSET);
+    (void)adc_read();
+    (void)adc_read();
+    return (adc_read() + adc_read()) / 2;
+}
+
+// START is active high with a pull-down -> affected by RP2350-E9 (the pad can
+// latch at ~2 V after being driven high). Keep the input buffer off between
+// reads, enable it only for a short sample, give the pin time to settle.
+static bool read_start_button(void) {
+    gpio_set_input_enabled(PIN_BTN_ST, true);
+    busy_wait_us(5);
+    bool v = gpio_get(PIN_BTN_ST);
+    gpio_set_input_enabled(PIN_BTN_ST, false);
+    return v;
+}
 
 void held_hw_early_init(void) {
-    ctrl_init();   // GPIOs + ADC for buttons (also needed by pwr_init)
+    ctrl_init();   // GPIOs (pulls) + ADC for buttons, also needed by pwr_init
     pwr_init();    // latch PWR_EN so the device stays on
 
-    // calibrate analog stick centre
-    int sx = 0, sy = 0;
-    for (int i = 0; i < 8; i++) {
-        sx += analog_read(PIN_ANALOG_X);
-        sy += analog_read(PIN_ANALOG_Y);
-    }
-    stick_x0 = sx / 8;
-    stick_y0 = sy / 8;
+    // START: plain input with pull-down, input buffer only on while sampling
+    gpio_init(PIN_BTN_ST);
+    gpio_set_dir(PIN_BTN_ST, GPIO_IN);
+    gpio_set_pulls(PIN_BTN_ST, false, true);
+    gpio_set_input_enabled(PIN_BTN_ST, false);
+
+    // analog stick centre
+    stick_x0 = adc_read_settled(PIN_ANALOG_X);
+    stick_y0 = adc_read_settled(PIN_ANALOG_Y);
+}
+
+#ifndef HELD_SYS_CLOCK_KHZ
+#define HELD_SYS_CLOCK_KHZ 252000
+#endif
+
+void held_set_sys_clock(void) {
+    vreg_set_voltage(VREG_VOLTAGE_1_30);
+    sleep_ms(10);  // let the voltage settle
+#if HELD_SYS_CLOCK_KHZ == 252000
+    set_sys_clock_pll(1260000000, 5, 1);  // VCO 1260 MHz / 5 / 1 = 252 MHz exactly
+#else
+    set_sys_clock_khz(HELD_SYS_CLOCK_KHZ, true);
+#endif
+}
+
+void held_buttons_raw(int out[HELD_RAW_COUNT]) {
+    for (int i = 0; i < HELD_RAW_COUNT; i++) out[i] = raw_adc[i];
 }
 
 void held_power_off(void) {
@@ -93,26 +148,41 @@ bool held_on_external_power(void) {
 }
 
 uint32_t held_buttons_poll(void) {
-    ctrl_button_state_update();
-
     uint32_t b = 0;
-    if (ctrl_is_pressed(BUTTON_LEFT))  b |= HELD_BTN_LEFT;
-    if (ctrl_is_pressed(BUTTON_RIGHT)) b |= HELD_BTN_RIGHT;
-    if (ctrl_is_pressed(BUTTON_UP))    b |= HELD_BTN_UP;
-    if (ctrl_is_pressed(BUTTON_DOWN))  b |= HELD_BTN_DOWN;
-    if (ctrl_is_pressed(BUTTON_A))     b |= HELD_BTN_A;
-    if (ctrl_is_pressed(BUTTON_B))     b |= HELD_BTN_B;
-    if (ctrl_is_pressed(BUTTON_X))     b |= HELD_BTN_X;
-    if (ctrl_is_pressed(BUTTON_Y))     b |= HELD_BTN_Y;
-    if (ctrl_is_pressed(BUTTON_L))     b |= HELD_BTN_L;
-    if (ctrl_is_pressed(BUTTON_R))     b |= HELD_BTN_R;
-    if (ctrl_is_pressed(BUTTON_ST))    b |= HELD_BTN_START;
-    if (ctrl_is_pressed(BUTTON_SEL))   b |= HELD_BTN_SELECT;
-    if (ctrl_is_pressed(BUTTON_SW))    b |= HELD_BTN_STICK;
 
+    // digital, active low with pull-ups
+    if (!gpio_get(PIN_BTN_A))   b |= HELD_BTN_A;
+    if (!gpio_get(PIN_BTN_B))   b |= HELD_BTN_B;
+    if (!gpio_get(PIN_BTN_X))   b |= HELD_BTN_X;
+    if (!gpio_get(PIN_BTN_Y))   b |= HELD_BTN_Y;
+    if (!gpio_get(PIN_BTN_R))   b |= HELD_BTN_R;
+    if (!gpio_get(PIN_BTN_SEL)) b |= HELD_BTN_SELECT;
+    if (read_start_button())    b |= HELD_BTN_START;
+
+    // analog
+    int lr = adc_read_settled(PIN_DPAD_LR);
+    int ud = adc_read_settled(PIN_DPAD_UD);
+    int l  = adc_read_settled(PIN_BTN_L);
+    int sw = adc_read_settled(PIN_BTN_SW);
+    raw_adc[HELD_RAW_DPAD_LR] = lr;
+    raw_adc[HELD_RAW_DPAD_UD] = ud;
+    raw_adc[HELD_RAW_L] = l;
+    raw_adc[HELD_RAW_STICK_SW] = sw;
+
+    if (lr < DPAD_LOW_MAX)  b |= HELD_BTN_LEFT;
+    if (lr > DPAD_HIGH_MIN) b |= HELD_BTN_RIGHT;
+    if (ud < DPAD_LOW_MAX)  b |= HELD_BTN_UP;
+    if (ud > DPAD_HIGH_MIN) b |= HELD_BTN_DOWN;
+    if (l  < ANALOG_BTN_MAX) b |= HELD_BTN_L;
+    if (sw < ANALOG_BTN_MAX) b |= HELD_BTN_STICK;
+
+    int sx = adc_read_settled(PIN_ANALOG_X);
+    int sy = adc_read_settled(PIN_ANALOG_Y);
+    raw_adc[HELD_RAW_STICK_X] = sx;
+    raw_adc[HELD_RAW_STICK_Y] = sy;
 #if HELD_USE_ANALOG_STICK
-    int dx = analog_read(PIN_ANALOG_X) - stick_x0;
-    int dy = analog_read(PIN_ANALOG_Y) - stick_y0;
+    int dx = sx - stick_x0;
+    int dy = sy - stick_y0;
 #if HELD_STICK_INVERT_X
     dx = -dx;
 #endif
@@ -164,8 +234,17 @@ int held_lcd_get_scale_mode(void) {
     return scale_mode;
 }
 
+static int backlight_level = HELD_BACKLIGHT_DEFAULT;
+
 void held_backlight_set(int level) {
-    lcd_backlight_set(level);
+    if (level < 5) level = 5;       // never fully dark while running
+    if (level > 100) level = 100;
+    backlight_level = level;
+    if (lcd) lcd_backlight_set(level);
+}
+
+int held_backlight_get(void) {
+    return backlight_level;
 }
 
 int held_lcd_init(void) {
@@ -193,7 +272,7 @@ int held_lcd_init(void) {
         hw_pal[i] = 0;   // framebuffers are zeroed -> black screen
 
     lcd_backlight_init();
-    lcd_backlight_set(100);
+    lcd_backlight_set(backlight_level);
 
     printf("LCD: %dx%d, %d FB, sys %lu Hz\n", LCD_W, LCD_H, HELD_LCD_NUM_FB,
            (unsigned long)clock_get_hz(clk_sys));
@@ -208,8 +287,29 @@ static inline int bank_for(color8_t *fb) {
     return 0;  // should not happen with <= 2 FBs
 }
 
+static bool frame_drop = false;
+static uint32_t frames_dropped = 0;
+
+uint32_t held_lcd_frames_dropped(void) {
+    return frames_dropped;
+}
+
+void held_lcd_set_frame_drop(bool enable) {
+    frame_drop = enable;
+}
+
 void held_lcd_present(const uint8_t *fb4, const uint8_t *disp_pal, const uint16_t *pal565) {
     if (!lcd) return;
+
+#if HELD_LCD_NUM_FB > 1
+    // Game loop: never wait for the panel. If the previous frame hasn't been
+    // picked up by a vblank yet, skip this one (keeps carts at their speed
+    // when the panel refreshes slower than _update60).
+    if (frame_drop && !lcd->is_backbuffer_free()) {
+        frames_dropped++;
+        return;
+    }
+#endif
 
     gbuffer_t fb;
 #if HELD_LCD_NUM_FB > 1

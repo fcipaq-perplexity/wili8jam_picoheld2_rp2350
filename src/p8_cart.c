@@ -432,6 +432,9 @@ static void cart_gameloop_inner(lua_State *L) {
     // Tell p8_api that flip() shouldn't sleep (game loop handles timing)
     p8_set_gameloop_mode(true);
 
+    // Don't let the LCD refresh rate throttle the game: drop frames instead
+    held_lcd_set_frame_drop(true);
+
     // Use PICO-8 screen-drawing print during game loop (not console_print)
     p8_register_print(L);
 
@@ -475,6 +478,7 @@ static void cart_gameloop_inner(lua_State *L) {
     }
 
     p8_set_gameloop_mode(false);
+    held_lcd_set_frame_drop(false);
 
     // Stop all audio (SFX + music) when exiting game loop
     p8_sfx_stop(-1);

@@ -10,6 +10,7 @@
  *   SELECT + START  -> exit cart / back to the cart picker
  *   SELECT + L      -> toggle screen scaling (crop 2x <-> fit 1.875x)
  *   SELECT + UP/DN  -> volume up/down
+ *   SELECT + LT/RT  -> backlight darker/brighter
  *   hold R (2 s)    -> power off
  */
 #include "input.h"
@@ -54,6 +55,11 @@ static void handle_system_combos(void) {
         if (pressed_edge(HELD_BTN_DOWN) && volume_level > 0) {
             audio_volume(--volume_level);
             printf("volume: %d\n", volume_level);
+        }
+        if (pressed_edge(HELD_BTN_LEFT) || pressed_edge(HELD_BTN_RIGHT)) {
+            int bl = held_backlight_get() + (pressed_edge(HELD_BTN_RIGHT) ? 10 : -10);
+            held_backlight_set(bl);
+            printf("backlight: %d\n", held_backlight_get());
         }
     }
 
@@ -181,7 +187,12 @@ static int l_debug(lua_State *L) {
     printf("buttons: 0x%04lx", (unsigned long)b);
     for (int i = 0; i < 13; i++)
         if (b & (1u << i)) printf(" %s", names[i]);
-    printf("\nbattery: %d%% (%s)\n", held_battery_level(),
+    int raw[HELD_RAW_COUNT];
+    held_buttons_raw(raw);
+    printf("\nadc: dpad lr=%d ud=%d  l=%d  stick x=%d y=%d sw=%d\n",
+           raw[HELD_RAW_DPAD_LR], raw[HELD_RAW_DPAD_UD], raw[HELD_RAW_L],
+           raw[HELD_RAW_STICK_X], raw[HELD_RAW_STICK_Y], raw[HELD_RAW_STICK_SW]);
+    printf("battery: %d%% (%s)\n", held_battery_level(),
            held_on_external_power() ? "usb" : "battery");
     return 0;
 }

@@ -870,6 +870,10 @@ bool LCD_DPI::is_ready() {
     return true;
 }
 
+bool LCD_DPI::is_backbuffer_free() {
+  return (m_num_fb == 1) || (sem_available(&m_free_backbufs) > 0);
+}
+
 lcd_error_t LCD_DPI::get_fb(gbuffer_t* lcd_buffer) {
   lcd_buffer->bitdepth = LCD_COLORDEPTH;
   lcd_buffer->width = m_screen_width;
