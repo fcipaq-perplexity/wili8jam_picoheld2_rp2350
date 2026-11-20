@@ -216,7 +216,23 @@ static int l_dpad(lua_State *L) {
     return 4;
 }
 
+// input.stick() -> x, y in % (-100..100, + = right / down)
+// input.stick("cal") -> re-calibrate the centre (release the stick first)
+static int l_stick(lua_State *L) {
+    if (lua_isstring(L, 1) && strcmp(lua_tostring(L, 1), "cal") == 0)
+        held_stick_recalibrate();
+    int x, y, c[6];
+    held_stick_get(&x, &y);
+    held_stick_get_calibration(c);
+    printf("stick: x=%d%% y=%d%%  cal x %d/%d/%d  y %d/%d/%d (min/centre/max)\n",
+           x, y, c[0], c[1], c[2], c[3], c[4], c[5]);
+    lua_pushinteger(L, x);
+    lua_pushinteger(L, y);
+    return 2;
+}
+
 static const luaL_Reg inputlib[] = {
+    {"stick",  l_stick},
     {"dpad",   l_dpad},
     {"btn",    l_btn},
     {"btnp",   l_btnp},

@@ -48,19 +48,39 @@
 #endif
 
 /* ---------------------------------------------------------------------------
- * Analog stick as additional D-pad (off until range/direction are verified)
+ * Analog stick
+ * Centre is calibrated at boot (don't touch the stick while switching on),
+ * min/max are tracked while running. Deflection is scaled per side to
+ * -100..100 %.
  * ------------------------------------------------------------------------- */
+// Stick also drives the PICO-8 direction buttons
 #ifndef HELD_USE_ANALOG_STICK
-#define HELD_USE_ANALOG_STICK   0
+#define HELD_USE_ANALOG_STICK     1
 #endif
-#ifndef HELD_STICK_THRESHOLD
-#define HELD_STICK_THRESHOLD  700   // deflection from the boot-time centre
+// Deflection (%) at which a direction counts as pressed
+#ifndef HELD_STICK_THRESHOLD_PCT
+#define HELD_STICK_THRESHOLD_PCT 50
 #endif
+// Dead zone around the centre (%), reported as 0
+#ifndef HELD_STICK_DEADZONE_PCT
+#define HELD_STICK_DEADZONE_PCT  10
+#endif
+// Assumed range (ADC counts, each side of the centre) before the stick has
+// been pushed to its limits. Smaller = more sensitive right after boot.
+#ifndef HELD_STICK_INIT_RANGE
+#define HELD_STICK_INIT_RANGE   600
+#endif
+// Two consecutive samples beyond the current extreme must agree within this
+// many counts to widen the range (glitch rejection)
+#ifndef HELD_STICK_GLITCH_TOL
+#define HELD_STICK_GLITCH_TOL   100
+#endif
+// Direction: after inversion, + must be right (X) / down (Y)
 #ifndef HELD_STICK_INVERT_X
-#define HELD_STICK_INVERT_X     1
+#define HELD_STICK_INVERT_X       1
 #endif
 #ifndef HELD_STICK_INVERT_Y
-#define HELD_STICK_INVERT_Y     0
+#define HELD_STICK_INVERT_Y       0
 #endif
 
 /* ---------------------------------------------------------------------------

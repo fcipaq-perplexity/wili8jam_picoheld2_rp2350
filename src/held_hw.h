@@ -59,6 +59,13 @@ uint32_t held_buttons_poll(void);
 #define HELD_RAW_COUNT    5
 void held_buttons_raw(int out[HELD_RAW_COUNT]);
 
+// Analog stick deflection in % (-100..100, + = right / down) from the last poll.
+void held_stick_get(int *x, int *y);
+// Re-take the centre (stick must be released) and reset the tracked range.
+void held_stick_recalibrate(void);
+// min, centre, max for X, then Y (raw ADC counts)
+void held_stick_get_calibration(int out[6]);
+
 // D-pad ADC thresholds (defaults: held_config.h). Order: left max, right min,
 // up max, down min.
 void held_dpad_set_thresholds(int left_max, int right_min, int up_max, int down_min);

@@ -81,8 +81,10 @@ static void draw_pattern(uint32_t frame) {
     snprintf(buf, sizeof(buf), "pad lr%4d ud%4d l%4d", raw[HELD_RAW_DPAD_LR],
              raw[HELD_RAW_DPAD_UD], raw[HELD_RAW_L]);
     gfx_print(buf, 8, 78, 6);
-    snprintf(buf, sizeof(buf), "stick x%4d y%4d", raw[HELD_RAW_STICK_X],
-             raw[HELD_RAW_STICK_Y]);
+    int spx, spy;
+    held_stick_get(&spx, &spy);
+    snprintf(buf, sizeof(buf), "stick x%4d y%4d %4d%%%4d%%", raw[HELD_RAW_STICK_X],
+             raw[HELD_RAW_STICK_Y], spx, spy);
     gfx_print(buf, 8, 85, 6);
     snprintf(buf, sizeof(buf), "bat %d%% %s  bl %d", held_battery_level(),
              held_on_external_power() ? "usb" : "", held_backlight_get());
@@ -128,6 +130,10 @@ int main(void) {
         if (now - t_last >= 2000) {
             int raw[HELD_RAW_COUNT];
             held_buttons_raw(raw);
+            int sc[6];
+            held_stick_get_calibration(sc);
+            printf("stick cal x %d/%d/%d  y %d/%d/%d (min/centre/max)\n",
+                   sc[0], sc[1], sc[2], sc[3], sc[4], sc[5]);
             printf("hwtest: lcd=%d  %lu fps  buttons=0x%04lx  bat=%d%%  "
                    "adc lr=%d ud=%d l=%d stick x=%d y=%d\n", err,
                    (unsigned long)((frame - frames_last) * 1000 / (now - t_last)),

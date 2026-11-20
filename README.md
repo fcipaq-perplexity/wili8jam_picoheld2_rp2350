@@ -36,7 +36,7 @@ The hardware drivers in `picoengine/` are the Pico Engine library (LCD, buttons,
 
 | Button | PICO-8 / function |
 |-|-|
-| D-pad | ⬅️ ➡️ ⬆️ ⬇️ (analog stick optional, see `HELD_USE_ANALOG_STICK`) |
+| D-pad / analog stick | ⬅️ ➡️ ⬆️ ⬇️ (don't touch the stick while switching on: its centre is calibrated at boot) |
 | A | 🅾️ (O) |
 | B | ❎ (X) |
 | START | pause/menu button (`btn(6)`) |
@@ -76,7 +76,7 @@ Outputs:
 - `build/wili8jam.uf2` -- the console
 - `build/picoheld2_hwtest.uf2` -- hardware bring-up test: colour bars, crop/fit frame markers, orientation marker, live button display with raw ADC values (D-pad axes, L, stick), A/B play test sounds
 
-Tuning knobs live in `src/held_config.h` (all overridable with `target_compile_definitions`): D-pad ADC thresholds (`HELD_DPAD_LEFT_MAX`, `HELD_DPAD_RIGHT_MIN`, `HELD_DPAD_UP_MAX`, `HELD_DPAD_DOWN_MIN`), the SELECT glitch filter (`HELD_SEL_CONSECUTIVE`), analog stick (`HELD_USE_ANALOG_STICK`, thresholds, inversion), `HELD_LCD_NUM_FB` (2 = double buffering, 1 = single buffer), `HELD_BACKLIGHT_DEFAULT`. Also `PSRAM_MAX_FREQ_HZ` in `src/psram.h` (default 84 MHz; 63000000 if PSRAM is flaky).
+Tuning knobs live in `src/held_config.h` (all overridable with `target_compile_definitions`): D-pad ADC thresholds (`HELD_DPAD_LEFT_MAX`, `HELD_DPAD_RIGHT_MIN`, `HELD_DPAD_UP_MAX`, `HELD_DPAD_DOWN_MIN`), the SELECT glitch filter (`HELD_SEL_CONSECUTIVE`), analog stick (`HELD_USE_ANALOG_STICK`, `HELD_STICK_THRESHOLD_PCT`, dead zone, inversion; centre calibrated at boot, min/max tracked at runtime), `HELD_LCD_NUM_FB` (2 = double buffering, 1 = single buffer), `HELD_BACKLIGHT_DEFAULT`. Also `PSRAM_MAX_FREQ_HZ` in `src/psram.h` (default 84 MHz; 63000000 if PSRAM is flaky).
 
 The D-pad thresholds can be tried out live from the REPL: `input.dpad()` prints the current values and the raw ADC readings, `input.dpad(1150, 2250, 1600, 2750)` sets left max, right min, up max, down min.
 
@@ -113,7 +113,7 @@ hello
 > flip()
 ```
 
-Built-in commands: `ls`, `cd`, `load`, `run`, `resume`, `cls`, `help`, `info`, `reboot`, `input.debug()`, `input.dpad()`
+Built-in commands: `ls`, `cd`, `load`, `run`, `resume`, `cls`, `help`, `info`, `reboot`, `input.debug()`, `input.dpad()`, `input.stick()` (`input.stick("cal")` re-centres)
 
 ## Source Files
 

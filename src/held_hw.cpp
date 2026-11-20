@@ -37,7 +37,85 @@
 // Power / buttons
 // ---------------------------------------------------------------------------
 
-static int stick_x0 = 2048, stick_y0 = 2048;
+// ---- analog stick ---------------------------------------------------------
+// Centre is calibrated at boot (stick must not be touched while booting).
+// The extremes start at centre +/- HELD_STICK_INIT_RANGE and grow while the
+// device runs, so aged/drifting sticks still reach 100 % in every direction.
+// A new extreme is only taken over if seen in two consecutive samples
+// (a single ADC glitch can't widen the range and desensitise the stick).
+static int adc_read_settled(int gpio);
+
+typedef struct {
+    int centre, min, max;
+    int cand_min, cand_max;   // candidates waiting for confirmation
+} stick_axis_t;
+
+static stick_axis_t stick_ax[2];   // 0 = X, 1 = Y
+static int stick_pct[2];           // last deflection, -100..100
+
+static void stick_axis_init(stick_axis_t *a, int centre) {
+    a->centre = centre;
+    a->min = centre - HELD_STICK_INIT_RANGE;
+    a->max = centre + HELD_STICK_INIT_RANGE;
+    if (a->min < 0) a->min = 0;
+    if (a->max > 4095) a->max = 4095;
+    a->cand_min = a->min;
+    a->cand_max = a->max;
+}
+
+// raw ADC value -> -100..100 (relative to centre, scaled per side), dead zone applied
+static int stick_axis_update(stick_axis_t *a, int v) {
+    if (v < a->min) {
+        if (a->cand_min < a->min && v <= a->cand_min + HELD_STICK_GLITCH_TOL)
+            a->min = (v > a->cand_min) ? v : a->cand_min;   // confirmed
+        a->cand_min = v;
+    } else {
+        a->cand_min = a->min;
+    }
+    if (v > a->max) {
+        if (a->cand_max > a->max && v >= a->cand_max - HELD_STICK_GLITCH_TOL)
+            a->max = (v < a->cand_max) ? v : a->cand_max;
+        a->cand_max = v;
+    } else {
+        a->cand_max = a->max;
+    }
+
+    int d = v - a->centre;
+    int pct;
+    if (d >= 0) {
+        int span = a->max - a->centre;
+        pct = span > 0 ? d * 100 / span : 0;
+    } else {
+        int span = a->centre - a->min;
+        pct = span > 0 ? d * 100 / span : 0;
+    }
+    if (pct > 100) pct = 100;
+    if (pct < -100) pct = -100;
+    if (pct > -HELD_STICK_DEADZONE_PCT && pct < HELD_STICK_DEADZONE_PCT) pct = 0;
+    return pct;
+}
+
+void held_stick_get(int *x, int *y) {
+    if (x) *x = stick_pct[0];
+    if (y) *y = stick_pct[1];
+}
+
+void held_stick_recalibrate(void) {
+    // average a few samples for the centre
+    int sx = 0, sy = 0;
+    for (int i = 0; i < 8; i++) {
+        sx += adc_read_settled(PIN_ANALOG_X);
+        sy += adc_read_settled(PIN_ANALOG_Y);
+    }
+    stick_axis_init(&stick_ax[0], sx / 8);
+    stick_axis_init(&stick_ax[1], sy / 8);
+    stick_pct[0] = stick_pct[1] = 0;
+}
+
+void held_stick_get_calibration(int out[6]) {
+    out[0] = stick_ax[0].min; out[1] = stick_ax[0].centre; out[2] = stick_ax[0].max;
+    out[3] = stick_ax[1].min; out[4] = stick_ax[1].centre; out[5] = stick_ax[1].max;
+}
 
 // D-pad thresholds (runtime adjustable, defaults in held_config.h)
 static int dpad_left_max  = HELD_DPAD_LEFT_MAX;
@@ -99,9 +177,8 @@ void held_hw_early_init(void) {
     gpio_set_dir(PIN_BTN_SW, GPIO_IN);
     gpio_set_pulls(PIN_BTN_SW, true, false);
 
-    // analog stick centre
-    stick_x0 = adc_read_settled(PIN_ANALOG_X);
-    stick_y0 = adc_read_settled(PIN_ANALOG_Y);
+    // analog stick centre (must not be touched during boot)
+    held_stick_recalibrate();
 }
 
 void held_set_sys_clock(void) {
@@ -178,19 +255,21 @@ uint32_t held_buttons_poll(void) {
     int sy = adc_read_settled(PIN_ANALOG_Y);
     raw_adc[HELD_RAW_STICK_X] = sx;
     raw_adc[HELD_RAW_STICK_Y] = sy;
-#if HELD_USE_ANALOG_STICK
-    int dx = sx - stick_x0;
-    int dy = sy - stick_y0;
+    int px = stick_axis_update(&stick_ax[0], sx);
+    int py = stick_axis_update(&stick_ax[1], sy);
 #if HELD_STICK_INVERT_X
-    dx = -dx;
+    px = -px;
 #endif
 #if HELD_STICK_INVERT_Y
-    dy = -dy;
+    py = -py;
 #endif
-    if (dx < -HELD_STICK_THRESHOLD) b |= HELD_BTN_LEFT;
-    if (dx >  HELD_STICK_THRESHOLD) b |= HELD_BTN_RIGHT;
-    if (dy < -HELD_STICK_THRESHOLD) b |= HELD_BTN_UP;
-    if (dy >  HELD_STICK_THRESHOLD) b |= HELD_BTN_DOWN;
+    stick_pct[0] = px;   // + = right
+    stick_pct[1] = py;   // + = down
+#if HELD_USE_ANALOG_STICK
+    if (px <= -HELD_STICK_THRESHOLD_PCT) b |= HELD_BTN_LEFT;
+    if (px >=  HELD_STICK_THRESHOLD_PCT) b |= HELD_BTN_RIGHT;
+    if (py <= -HELD_STICK_THRESHOLD_PCT) b |= HELD_BTN_UP;
+    if (py >=  HELD_STICK_THRESHOLD_PCT) b |= HELD_BTN_DOWN;
 #endif
     return b;
 }
