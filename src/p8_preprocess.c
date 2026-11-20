@@ -646,74 +646,103 @@ static size_t find_compound_op(const char *line, size_t len,
 
 /*
  * Find the end of the RHS expression for a compound assignment.
- * Stops at: bare Lua keywords (end, then, else, elseif, do) at depth 0,
- * or a new assignment pattern (identifier followed by = but not ==) at depth 0.
- * Returns the index where the RHS ends (exclusive).
+ *
+ * PICO-8 lets another statement follow on the same line, e.g.
+ *   if freeze>0 then freeze-=1 return end
+ *   x+=1 y=2        a-=b foo()
+ * The RHS ends at depth 0 when
+ *   - a statement keyword follows (end, then, else, elseif, do, return,
+ *     break, if, for, while, local, repeat, until, goto, function), or
+ *   - a new operand starts (identifier / number) right after a complete
+ *     operand, separated by whitespace: "1 return", "x y=2", "t[i] foo()"
+ *     (and/or/not are operators, not operands).
+ * Returns the index where the RHS ends (exclusive), trailing whitespace trimmed.
  */
+static bool is_rhs_stop_keyword(const char *line, size_t i, size_t len) {
+    static const char *kw[] = { "end", "then", "else", "elseif", "do", "return",
+                                "break", "if", "for", "while", "local", "repeat",
+                                "until", "goto", "function", NULL };
+    for (int k = 0; kw[k]; k++)
+        if (match_keyword(line, i, len, kw[k])) return true;
+    return false;
+}
+
 static size_t find_rhs_end(const char *line, size_t start, size_t len) {
     size_t i = start;
-    int depth = 0; /* paren/bracket depth */
+    int depth = 0;              /* paren/bracket/brace depth */
+    bool prev_operand = false;  /* last token at depth 0 completed an operand */
+    bool gap = false;           /* whitespace since the last token */
     while (i < len) {
         char c = line[i];
 
-        /* Skip string literals */
-        if (c == '"' || c == '\'') {
-            i = skip_string(line, i, len);
-            continue;
-        }
-        /* Skip long strings */
-        if (c == '[') {
-            int lvl = long_bracket_level(line, i, len);
-            if (lvl >= 0) { i = skip_long_bracket(line, i + lvl + 2, len, lvl); continue; }
-        }
+        if (c == ' ' || c == '\t') { gap = true; i++; continue; }
+
         /* Stop at comments */
         if (c == '-' && i + 1 < len && line[i+1] == '-') break;
         if (c == '/' && i + 1 < len && line[i+1] == '/') break;
 
-        /* Track depth */
-        if (c == '(' || c == '[') { depth++; i++; continue; }
-        if (c == ')' || c == ']') { if (depth > 0) depth--; i++; continue; }
-
-        if (depth == 0) {
-            /* Check for bare keywords that end a statement */
-            if (is_ident_char(c) && (i == start || !is_ident_char(line[i-1]))) {
-                if (match_keyword(line, i, len, "end") ||
-                    match_keyword(line, i, len, "then") ||
-                    match_keyword(line, i, len, "else") ||
-                    match_keyword(line, i, len, "elseif") ||
-                    match_keyword(line, i, len, "do")) {
-                    break;
-                }
-            }
-
-            /* Detect new assignment: at a space boundary, look ahead for
-               ident = (but not ==). This catches patterns like "d=-1" where
-               the space-separated token starts a new statement. */
-            if (c == ' ' || c == '\t') {
-                size_t j = i;
-                while (j < len && (line[j] == ' ' || line[j] == '\t')) j++;
-                if (j < len && is_ident_char(line[j])) {
-                    /* Scan past identifier */
-                    while (j < len && is_ident_char(line[j])) j++;
-                    /* Skip whitespace between identifier and operator */
-                    while (j < len && (line[j] == ' ' || line[j] == '\t')) j++;
-                    /* Check for = (not ==, not <=, not >=, not ~=, not !=) */
-                    if (j < len && line[j] == '=' && (j + 1 >= len || line[j+1] != '=')) {
-                        break; /* RHS ends here at the whitespace */
-                    }
-                    /* Also check for compound assignment on the next token */
-                    if (j + 1 < len && line[j+1] == '=' &&
-                        (line[j] == '+' || line[j] == '-' || line[j] == '*' ||
-                         line[j] == '/' || line[j] == '%')) {
-                        break;
-                    }
-                    if (j + 2 < len && line[j] == '.' && line[j+1] == '.' && line[j+2] == '=') {
-                        break;
-                    }
-                }
+        /* String literals: an operand (or call argument: f"str") */
+        if (c == '"' || c == '\'') {
+            i = skip_string(line, i, len);
+            if (depth == 0) prev_operand = true;
+            gap = false;
+            continue;
+        }
+        /* Long strings */
+        if (c == '[') {
+            int lvl = long_bracket_level(line, i, len);
+            if (lvl >= 0) {
+                i = skip_long_bracket(line, i + lvl + 2, len, lvl);
+                if (depth == 0) prev_operand = true;
+                gap = false;
+                continue;
             }
         }
 
+        /* Brackets */
+        if (c == '(' || c == '[' || c == '{') { depth++; i++; gap = false; continue; }
+        if (c == ')' || c == ']' || c == '}') {
+            if (depth > 0) depth--;
+            i++;
+            if (depth == 0) prev_operand = true;
+            gap = false;
+            continue;
+        }
+
+        if (depth > 0) { i++; continue; }
+
+        /* Identifiers, keywords and numbers at depth 0 */
+        if (is_ident_char(c)) {
+            if (is_rhs_stop_keyword(line, i, len)) break;
+            if (match_keyword(line, i, len, "and") || match_keyword(line, i, len, "or") ||
+                match_keyword(line, i, len, "not")) {
+                while (i < len && is_ident_char(line[i])) i++;
+                prev_operand = false;
+                gap = false;
+                continue;
+            }
+            /* operand directly after a complete operand -> new statement */
+            if (prev_operand && gap) break;
+            bool number = (c >= '0' && c <= '9');
+            while (i < len && (is_ident_char(line[i]) ||
+                   (number && line[i] == '.' && !(i + 1 < len && line[i+1] == '.')))) i++;
+            prev_operand = true;
+            gap = false;
+            continue;
+        }
+
+        /* Number starting with '.', e.g. .5 */
+        if (c == '.' && i + 1 < len && line[i+1] >= '0' && line[i+1] <= '9' && !prev_operand) {
+            i++;
+            while (i < len && (is_ident_char(line[i]) || line[i] == '.')) i++;
+            prev_operand = true;
+            gap = false;
+            continue;
+        }
+
+        /* Any other character is an operator / separator */
+        prev_operand = false;
+        gap = false;
         i++;
     }
     /* Trim trailing whitespace from RHS */

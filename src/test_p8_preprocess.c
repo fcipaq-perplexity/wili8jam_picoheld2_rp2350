@@ -241,6 +241,27 @@ int main(void) {
          "x += 1 then",
          "x = x + (1) then\n");
 
+    /* Celeste: compound assignment followed by return */
+    test("compound-rhs-return",
+         "if freeze>0 then freeze-=1 return end",
+         "if freeze>0 then freeze = freeze - (1) return end\n");
+
+    /* RHS ends where a new statement (function call) starts */
+    test("compound-rhs-call",
+         "t+=1 foo(t)",
+         "t = t + (1) foo(t)\n");
+
+    /* call / index / method expressions stay in the RHS */
+    test("compound-rhs-call-expr",
+         "x+=f(a, b) *2 y=3",
+         "x = x + (f(a, b) *2) y=3\n");
+    test("compound-rhs-method",
+         "s..=o:name() .. \" \" print(s)",
+         "s = s .. (o:name() .. \" \") print(s)\n");
+    test("compound-rhs-and-or",
+         "v+=a and 1 or 2 break",
+         "v = v + (a and 1 or 2) break\n");
+
     /* wander.p8 line 34: short-form if with compound + new assignment */
     test("wander-line34",
          "if (btn(\xe2\xac\x85\xef\xb8\x8f)) dx-= ac d=-1",
