@@ -24,6 +24,7 @@ extern "C" {
 #include "p8_console.h"
 #include "held_hw.h"
 #include "held_config.h"
+#include "held_prof.h"
 }
 
 static tlsf_t psram_tlsf;
@@ -118,6 +119,25 @@ static void lua_mem_stats(struct mem_stats *ps, struct mem_stats *ss) {
     if (sram_tlsf) tlsf_walk_pool(tlsf_get_pool(sram_tlsf), mem_walker, ss);
 }
 
+// Pool usage for the game loop perf statistics (p8_cart.c)
+extern "C" void lua_pool_usage(uint32_t *sram_used, uint32_t *sram_size, uint32_t *psram_used) {
+    struct mem_stats ps, ss;
+    lua_mem_stats(&ps, &ss);
+    *sram_used = (uint32_t)ss.used;
+    *sram_size = (uint32_t)sram_pool_size;
+    *psram_used = (uint32_t)ps.used;
+}
+
+// sys.prof(on, [hz]): sampling profiler for core 0. While on, the game loop
+// prints the hottest code addresses every 5 s (resolve with addr2line).
+static int sys_prof(lua_State *L) {
+    bool on = lua_toboolean(L, 1);
+    if (on) held_prof_start((uint32_t)luaL_optinteger(L, 2, 5000));
+    else held_prof_stop();
+    printf("profiler %s\n", on ? "on (reports in the game loop perf output)" : "off");
+    return 0;
+}
+
 // --- sys library ---
 static int sys_memfree(lua_State *L) {
     struct mem_stats ps, ss;
@@ -148,6 +168,7 @@ static int sys_busprio(lua_State *L) {
 
 static const luaL_Reg syslib[] = {
     {"busprio", sys_busprio},
+    {"prof",    sys_prof},
     {"memfree",  sys_memfree},
     {"memused",  sys_memused},
     {"memtotal", sys_memtotal},

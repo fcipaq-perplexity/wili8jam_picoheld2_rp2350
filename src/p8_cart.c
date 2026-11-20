@@ -15,6 +15,10 @@
 #include "input.h"
 #include "audio.h"
 #include "held_hw.h"
+#include "held_prof.h"
+#include "hardware/structs/xip_ctrl.h"
+
+void lua_pool_usage(uint32_t *sram_used, uint32_t *sram_size, uint32_t *psram_used);
 
 #include "lua.h"
 #include "lauxlib.h"
@@ -444,6 +448,8 @@ static void cart_gameloop_inner(lua_State *L) {
     uint32_t st_late = 0;
     absolute_time_t st_start = get_absolute_time();
     held_lcd_stats(NULL, NULL, NULL);   // reset counters
+    xip_ctrl_hw->ctr_hit = 0;           // XIP cache counters (write clears)
+    xip_ctrl_hw->ctr_acc = 0;
 
     // Main game loop
     while (true) {
@@ -506,6 +512,17 @@ static void cart_gameloop_inner(lua_State *L) {
                    st_input / 1000.0 / f, st_update / 1000.0 / f, st_draw / 1000.0 / f,
                    st_flip / 1000.0 / f, st_sleep / 1000.0 / f, (unsigned)st_late,
                    (unsigned)presented, (unsigned)dropped, pres_us / 1000.0);
+            uint32_t xh = xip_ctrl_hw->ctr_hit, xa = xip_ctrl_hw->ctr_acc;
+            xip_ctrl_hw->ctr_hit = 0;
+            xip_ctrl_hw->ctr_acc = 0;
+            uint32_t su, ss, pu;
+            lua_pool_usage(&su, &ss, &pu);
+            printf("perf: xip cache %lu.%lu%% hits of %lu k accesses | lua heap: sram %lu/%lu k, psram %lu k\n",
+                   xa ? (unsigned long)((uint64_t)xh * 100 / xa) : 0,
+                   xa ? (unsigned long)((uint64_t)xh * 1000 / xa % 10) : 0,
+                   (unsigned long)(xa / 1000), (unsigned long)(su / 1024),
+                   (unsigned long)(ss / 1024), (unsigned long)(pu / 1024));
+            if (held_prof_active()) held_prof_report(30);
             st_frames = 0;
             st_input = st_update = st_draw = st_flip = st_sleep = 0;
             st_late = 0;

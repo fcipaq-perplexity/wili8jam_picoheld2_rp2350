@@ -135,8 +135,10 @@
 #ifndef HELD_LUA_SRAM_POOL_KB
 #define HELD_LUA_SRAM_POOL_KB 128
 #endif
+// 2048: the Lua stack and the bytecode / constant arrays of most functions
+// (read for every executed instruction) fit and land in SRAM.
 #ifndef HELD_LUA_SRAM_MAX_OBJ
-#define HELD_LUA_SRAM_MAX_OBJ 512
+#define HELD_LUA_SRAM_MAX_OBJ 2048
 #endif
 
 // Backlight at boot, 5..100
