@@ -11,6 +11,7 @@
  *   SELECT + L      -> toggle screen scaling (crop 2x <-> fit 1.875x)
  *   SELECT + UP/DN  -> volume up/down
  *   SELECT + LT/RT  -> backlight darker/brighter
+ *   SELECT + X      -> sampling profiler on/off (reports on USB serial)
  *   hold R (2 s)    -> power off
  */
 #include "input.h"
@@ -20,6 +21,7 @@
 #include "lauxlib.h"
 #include "pico/stdlib.h"
 #include "held_hw.h"
+#include "held_prof.h"
 #include "audio.h"
 
 #define POWER_OFF_HOLD_MS 2000
@@ -55,6 +57,10 @@ static void handle_system_combos(void) {
         if (pressed_edge(HELD_BTN_DOWN) && volume_level > 0) {
             audio_volume(--volume_level);
             printf("volume: %d\n", volume_level);
+        }
+        if (pressed_edge(HELD_BTN_X)) {
+            if (held_prof_active()) held_prof_stop(); else held_prof_start(5000);
+            printf("profiler: %s\n", held_prof_active() ? "on" : "off");
         }
         if (pressed_edge(HELD_BTN_LEFT) || pressed_edge(HELD_BTN_RIGHT)) {
             int bl = held_backlight_get() + (pressed_edge(HELD_BTN_RIGHT) ? 10 : -10);

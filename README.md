@@ -44,6 +44,7 @@ The hardware drivers in `picoengine/` are the Pico Engine library (LCD, buttons,
 | SELECT + L | toggle screen scaling: crop (2x) / fit (1.875x) |
 | SELECT + UP / DOWN | volume |
 | SELECT + LEFT / RIGHT | backlight |
+| SELECT + X | sampling profiler on/off (output on USB serial in the game loop) |
 | hold R (2 s) | power off |
 | SELECT while powering on | USB bootloader (hard-wired to BOOTSEL) |
 

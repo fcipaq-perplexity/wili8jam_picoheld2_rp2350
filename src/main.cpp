@@ -158,11 +158,16 @@ static int sys_memtotal(lua_State *L) {
     return 1;
 }
 
-// sys.busprio([on]): CPU priority over DMA on the bus fabric; returns state
+// sys.busprio(["dma"|"cpu"|"equal"]): bus fabric priority; returns the mode
 static int sys_busprio(lua_State *L) {
-    if (!lua_isnoneornil(L, 1)) held_set_cpu_bus_priority(lua_toboolean(L, 1));
-    printf("cpu bus priority: %s\n", held_get_cpu_bus_priority() ? "high" : "normal");
-    lua_pushboolean(L, held_get_cpu_bus_priority());
+    static const char *names[] = { "equal", "dma", "cpu" };
+    if (lua_type(L, 1) == LUA_TSTRING) {
+        const char *m = lua_tostring(L, 1);
+        for (int i = 0; i < 3; i++)
+            if (strcmp(m, names[i]) == 0) held_set_bus_priority(i);
+    }
+    printf("bus priority: %s\n", names[held_get_bus_priority()]);
+    lua_pushstring(L, names[held_get_bus_priority()]);
     return 1;
 }
 

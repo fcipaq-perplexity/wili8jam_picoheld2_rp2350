@@ -213,6 +213,7 @@ endif()
 add_executable(picoheld2_hwtest
     src/hwtest.c
     src/held_hw.cpp
+    src/held_prof.c
     src/gfx.c
     src/input.c
     src/audio.c

@@ -101,10 +101,12 @@ void held_lcd_sync(void);
 // frames dropped (resets the counters).
 void held_lcd_stats(uint32_t *present_avg_us, uint32_t *presented, uint32_t *dropped);
 
-// Bus fabric priority for the CPUs over DMA (the LCD scanout DMA is busy all
-// the time). Default HELD_CPU_BUS_PRIORITY, switchable at runtime.
-void held_set_cpu_bus_priority(bool high);
-bool held_get_cpu_bus_priority(void);
+// Bus fabric priority, see HELD_BUS_PRIORITY in held_config.h
+#define HELD_BUS_PRIO_EQUAL 0
+#define HELD_BUS_PRIO_DMA   1
+#define HELD_BUS_PRIO_CPU   2
+void held_set_bus_priority(int mode);
+int  held_get_bus_priority(void);
 
 void held_lcd_set_scale_mode(int mode);
 int  held_lcd_get_scale_mode(void);

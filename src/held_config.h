@@ -121,11 +121,15 @@
 #define HELD_LCD_NUM_FB         2
 #endif
 
-// Give the CPU cores priority over DMA on the bus fabric (0/1). The LCD
-// scanout DMA is busy all the time; with 1 the CPU wins on conflicts (the
-// panel's pixel clock may then stall a bit more). Runtime: sys.busprio(true)
-#ifndef HELD_CPU_BUS_PRIORITY
-#define HELD_CPU_BUS_PRIORITY   0
+// Bus fabric priority (who wins when CPU and DMA hit the same SRAM bank /
+// peripheral in the same cycle):
+//   0 = equal (hardware default), 1 = DMA high (default), 2 = CPUs high
+// The LCD scanout is a chain of DMA transfers with tight deadlines; with the
+// Lua stack/bytecode and hot code in SRAM the CPU collides with it often, and
+// a lost arbitration shows up as artifacts. -> DMA high.
+// Runtime: sys.busprio("dma" | "cpu" | "equal")
+#ifndef HELD_BUS_PRIORITY
+#define HELD_BUS_PRIORITY       1
 #endif
 
 // Lua allocator: objects up to HELD_LUA_SRAM_MAX_OBJ bytes are placed in an

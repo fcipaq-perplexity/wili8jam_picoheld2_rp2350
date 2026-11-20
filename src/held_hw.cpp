@@ -415,7 +415,7 @@ int held_lcd_init(void) {
     lcd_backlight_init();
     lcd_backlight_set(backlight_level);
 
-    held_set_cpu_bus_priority(HELD_CPU_BUS_PRIORITY);
+    held_set_bus_priority(HELD_BUS_PRIORITY);
 
     // Frame scaling runs on core 1
     multicore_launch_core1(core1_present_loop);
@@ -563,10 +563,20 @@ void held_lcd_stats(uint32_t *present_avg_us, uint32_t *presented, uint32_t *dro
     frames_dropped = 0;
 }
 
-void held_set_cpu_bus_priority(bool high) {
-    busctrl_hw->priority = high ? (BUSCTRL_BUS_PRIORITY_PROC0_BITS | BUSCTRL_BUS_PRIORITY_PROC1_BITS) : 0;
+static int bus_prio_mode = HELD_BUS_PRIO_EQUAL;
+
+void held_set_bus_priority(int mode) {
+    uint32_t v = 0;
+    if (mode == HELD_BUS_PRIO_DMA)
+        v = BUSCTRL_BUS_PRIORITY_DMA_R_BITS | BUSCTRL_BUS_PRIORITY_DMA_W_BITS;
+    else if (mode == HELD_BUS_PRIO_CPU)
+        v = BUSCTRL_BUS_PRIORITY_PROC0_BITS | BUSCTRL_BUS_PRIORITY_PROC1_BITS;
+    else
+        mode = HELD_BUS_PRIO_EQUAL;
+    busctrl_hw->priority = v;
+    bus_prio_mode = mode;
 }
 
-bool held_get_cpu_bus_priority(void) {
-    return busctrl_hw->priority != 0;
+int held_get_bus_priority(void) {
+    return bus_prio_mode;
 }
