@@ -26,6 +26,7 @@ extern "C" {
 }
 
 static tlsf_t psram_tlsf;
+static psram_tune_result_t psram_tune_info;
 static size_t psram_total_size;
 static FATFS fatfs;
 static bool sd_mounted = false;
@@ -299,6 +300,44 @@ static int fs_list(lua_State *L) {
     return 1;
 }
 
+// fs.verify(path, [n]): read a file n times (default 3) and compare.
+// Detects flaky SD reads / PSRAM. Returns true if all reads were identical.
+static int fs_verify(lua_State *L) {
+    const char *path = luaL_checkstring(L, 1);
+    int n = (int)luaL_optinteger(L, 2, 3);
+    size_t sz0;
+    char *ref = read_file_to_psram(path, &sz0);
+    if (!ref) return luaL_error(L, "cannot read file: %s", path);
+    uint32_t sum = 0;
+    for (size_t i = 0; i < sz0; i++) sum = sum * 31 + (uint8_t)ref[i];
+    int bad = 0;
+    for (int k = 1; k < n; k++) {
+        size_t sz;
+        char *buf = read_file_to_psram(path, &sz);
+        if (!buf) { bad++; continue; }
+        if (sz != sz0) {
+            printf("read %d: size %u != %u\n", k, (unsigned)sz, (unsigned)sz0);
+            bad++;
+        } else {
+            for (size_t i = 0; i < sz; i++) {
+                if (buf[i] != ref[i]) {
+                    printf("read %d: first difference at byte %u (0x%02x vs 0x%02x)\n",
+                           k, (unsigned)i, (uint8_t)buf[i], (uint8_t)ref[i]);
+                    bad++;
+                    break;
+                }
+            }
+        }
+        tlsf_free(psram_tlsf, buf);
+    }
+    tlsf_free(psram_tlsf, ref);
+    printf("%s: %u bytes, checksum %08lx, %d/%d reads differ\n", path, (unsigned)sz0,
+           (unsigned long)sum, bad, n - 1);
+    p8_console_printf("%s: %d/%d bad\n", path, bad, n - 1);
+    lua_pushboolean(L, bad == 0);
+    return 1;
+}
+
 static int fs_read(lua_State *L) {
     const char *path = luaL_checkstring(L, 1);
 
@@ -358,6 +397,7 @@ static int fs_remove(lua_State *L) {
 static const luaL_Reg fslib[] = {
     {"list",    fs_list},
     {"read",    fs_read},
+    {"verify",  fs_verify},
     {"write",   fs_write},
     {"exists",  fs_exists},
     {"mkdir",   fs_mkdir},
@@ -464,6 +504,9 @@ static int lua_info(lua_State *L) {
     const char *fmt = "wili8jam / pico held 2\nrp2350b @ %u mhz\npsram: %uk free / %uk\n";
     printf(fmt, mhz, fk, tk);
     p8_console_printf(fmt, mhz, fk, tk);
+
+    printf("psram: %u mhz, rx delay %u%s\n", (unsigned)(psram_tune_info.freq_hz / 1000000),
+           (unsigned)psram_tune_info.rxdelay, psram_tune_info.ok ? "" : " (test failed)");
 
     // Pico Held 2 status
     const char *bfmt = "battery: %d%% (%s)\nscreen: %s\n";
@@ -697,7 +740,23 @@ int main() {
         while (true) { input_update(); sleep_ms(20); }  // hold R still powers off
     }
     printf("PSRAM: %u KB detected\n", (unsigned)(psram_total_size / 1024));
-    p8_console_printf("psram: %u kb\n", (unsigned)(psram_total_size / 1024));
+
+    // Find a reliable PSRAM clock / RX delay (pattern test, before any use)
+    {
+        psram_tune_result_t t = psram_tune(psram_total_size);
+        for (uint32_t i = 0; i < t.tried; i++) {
+            printf("PSRAM div %u (%u MHz): rx delay pass mask 0x%02x\n",
+                   (unsigned)(t.first_div + i),
+                   (unsigned)(clock_get_hz(clk_sys) / (t.first_div + i) / 1000000),
+                   t.pass_mask[i]);
+        }
+        printf("PSRAM: %s, %u MHz, rx delay %u\n", t.ok ? "ok" : "PATTERN TEST FAILED",
+               (unsigned)(t.freq_hz / 1000000), (unsigned)t.rxdelay);
+        p8_console_printf("psram: %u kb %u mhz rx%u%s\n", (unsigned)(psram_total_size / 1024),
+                          (unsigned)(t.freq_hz / 1000000), (unsigned)t.rxdelay,
+                          t.ok ? "" : " fail!");
+        psram_tune_info = t;
+    }
     p8_console_draw(); gfx_flip();
 
     // Init TLSF allocator on PSRAM

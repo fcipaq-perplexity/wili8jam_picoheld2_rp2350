@@ -25,7 +25,9 @@
 
 /* SPI speeds */
 #define SD_SPI_INIT_HZ   400000     /* 400 kHz for init */
+#ifndef SD_SPI_FAST_HZ
 #define SD_SPI_FAST_HZ   12500000   /* 12.5 MHz after init */
+#endif
 
 /* SD commands */
 #define CMD0    0   /* GO_IDLE_STATE */
