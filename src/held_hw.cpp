@@ -38,20 +38,25 @@
 // ---------------------------------------------------------------------------
 
 // ---- analog stick ---------------------------------------------------------
-// Centre is calibrated at boot (stick must not be touched while booting).
-// The extremes start at centre +/- HELD_STICK_INIT_RANGE and grow while the
-// device runs, so aged/drifting sticks still reach 100 % in every direction.
-// A new extreme is only taken over if seen in two consecutive samples
-// (a single ADC glitch can't widen the range and desensitise the stick).
+// Centre: calibrated from many samples once the supplies have settled
+// (held_stick_recalibrate(), called after the LCD is up; the stick must not
+// be touched while booting). While running, the centre follows the rest
+// position whenever the stick is held still near the centre (mechanical
+// hysteresis, drift of ageing sticks).
+// Range: the extremes start at centre +/- HELD_STICK_INIT_RANGE and grow
+// while running. A new extreme is only taken over if seen in two consecutive
+// samples (a single ADC glitch can't widen the range).
 static int adc_read_settled(int gpio);
 
 typedef struct {
     int centre, min, max;
     int cand_min, cand_max;   // candidates waiting for confirmation
+    int last_v;               // previous sample
+    int still_cnt;            // consecutive samples without movement
 } stick_axis_t;
 
-static stick_axis_t stick_ax[2];   // 0 = X, 1 = Y
-static int stick_pct[2];           // last deflection, -100..100
+static stick_axis_t stick_ax[2];   // 0 = ADC "X" channel, 1 = ADC "Y" channel
+static int stick_pct[2];           // last deflection (screen orientation), -100..100
 
 static void stick_axis_init(stick_axis_t *a, int centre) {
     a->centre = centre;
@@ -61,10 +66,28 @@ static void stick_axis_init(stick_axis_t *a, int centre) {
     if (a->max > 4095) a->max = 4095;
     a->cand_min = a->min;
     a->cand_max = a->max;
+    a->last_v = centre;
+    a->still_cnt = 0;
+}
+
+static int stick_axis_pct(const stick_axis_t *a, int v) {
+    int d = v - a->centre;
+    int pct;
+    if (d >= 0) {
+        int span = a->max - a->centre;
+        pct = span > 0 ? d * 100 / span : 0;
+    } else {
+        int span = a->centre - a->min;
+        pct = span > 0 ? d * 100 / span : 0;
+    }
+    if (pct > 100) pct = 100;
+    if (pct < -100) pct = -100;
+    return pct;
 }
 
 // raw ADC value -> -100..100 (relative to centre, scaled per side), dead zone applied
 static int stick_axis_update(stick_axis_t *a, int v) {
+    // --- range tracking ---
     if (v < a->min) {
         if (a->cand_min < a->min && v <= a->cand_min + HELD_STICK_GLITCH_TOL)
             a->min = (v > a->cand_min) ? v : a->cand_min;   // confirmed
@@ -80,17 +103,27 @@ static int stick_axis_update(stick_axis_t *a, int v) {
         a->cand_max = a->max;
     }
 
-    int d = v - a->centre;
-    int pct;
-    if (d >= 0) {
-        int span = a->max - a->centre;
-        pct = span > 0 ? d * 100 / span : 0;
-    } else {
-        int span = a->centre - a->min;
-        pct = span > 0 ? d * 100 / span : 0;
+    // --- centre tracking: stick resting near the centre -> follow it ---
+    int dv = v - a->last_v;
+    if (dv < 0) dv = -dv;
+    a->still_cnt = (dv <= HELD_STICK_STILL_TOL) ? a->still_cnt + 1 : 0;
+    a->last_v = v;
+
+    int pct = stick_axis_pct(a, v);
+    if (a->still_cnt >= HELD_STICK_RECENTRE_SAMPLES &&
+        pct > -HELD_STICK_RECENTRE_PCT && pct < HELD_STICK_RECENTRE_PCT) {
+        int diff = v - a->centre;
+        // move 1/4 of the way per sample (at least 1 count)
+        int step = diff / 4;
+        if (step == 0 && diff != 0) step = diff > 0 ? 1 : -1;
+        int c = a->centre + step;
+        // keep the centre well inside the tracked range
+        if (c < a->min + HELD_STICK_GLITCH_TOL) c = a->min + HELD_STICK_GLITCH_TOL;
+        if (c > a->max - HELD_STICK_GLITCH_TOL) c = a->max - HELD_STICK_GLITCH_TOL;
+        a->centre = c;
+        pct = stick_axis_pct(a, v);
     }
-    if (pct > 100) pct = 100;
-    if (pct < -100) pct = -100;
+
     if (pct > -HELD_STICK_DEADZONE_PCT && pct < HELD_STICK_DEADZONE_PCT) pct = 0;
     return pct;
 }
@@ -100,15 +133,35 @@ void held_stick_get(int *x, int *y) {
     if (y) *y = stick_pct[1];
 }
 
+// Centre from HELD_STICK_CAL_SAMPLES samples per axis. If the samples spread
+// more than HELD_STICK_CAL_SPREAD (stick touched, supply not settled) the
+// measurement is repeated, up to 5 times.
 void held_stick_recalibrate(void) {
-    // average a few samples for the centre
-    int sx = 0, sy = 0;
-    for (int i = 0; i < 8; i++) {
-        sx += adc_read_settled(PIN_ANALOG_X);
-        sy += adc_read_settled(PIN_ANALOG_Y);
+    int cx = 2048, cy = 2048;
+    for (int attempt = 0; attempt < 5; attempt++) {
+        int sum_x = 0, sum_y = 0;
+        int min_x = 4095, max_x = 0, min_y = 4095, max_y = 0;
+        for (int i = 0; i < HELD_STICK_CAL_SAMPLES; i++) {
+            int x = adc_read_settled(PIN_ANALOG_X);
+            int y = adc_read_settled(PIN_ANALOG_Y);
+            sum_x += x; sum_y += y;
+            if (x < min_x) min_x = x;
+            if (x > max_x) max_x = x;
+            if (y < min_y) min_y = y;
+            if (y > max_y) max_y = y;
+            sleep_us(500);
+        }
+        cx = sum_x / HELD_STICK_CAL_SAMPLES;
+        cy = sum_y / HELD_STICK_CAL_SAMPLES;
+        bool stable = (max_x - min_x) <= HELD_STICK_CAL_SPREAD &&
+                      (max_y - min_y) <= HELD_STICK_CAL_SPREAD;
+        printf("stick cal #%d: x %d (spread %d)  y %d (spread %d)%s\n", attempt, cx,
+               max_x - min_x, cy, max_y - min_y, stable ? "" : "  -> retry");
+        if (stable) break;
+        sleep_ms(20);
     }
-    stick_axis_init(&stick_ax[0], sx / 8);
-    stick_axis_init(&stick_ax[1], sy / 8);
+    stick_axis_init(&stick_ax[0], cx);
+    stick_axis_init(&stick_ax[1], cy);
     stick_pct[0] = stick_pct[1] = 0;
 }
 
@@ -177,8 +230,10 @@ void held_hw_early_init(void) {
     gpio_set_dir(PIN_BTN_SW, GPIO_IN);
     gpio_set_pulls(PIN_BTN_SW, true, false);
 
-    // analog stick centre (must not be touched during boot)
-    held_stick_recalibrate();
+    // preliminary stick centre; the real calibration happens after the LCD
+    // is up (supplies settled), see held_lcd_init()
+    stick_axis_init(&stick_ax[0], adc_read_settled(PIN_ANALOG_X));
+    stick_axis_init(&stick_ax[1], adc_read_settled(PIN_ANALOG_Y));
 }
 
 void held_set_sys_clock(void) {
@@ -255,8 +310,14 @@ uint32_t held_buttons_poll(void) {
     int sy = adc_read_settled(PIN_ANALOG_Y);
     raw_adc[HELD_RAW_STICK_X] = sx;
     raw_adc[HELD_RAW_STICK_Y] = sy;
-    int px = stick_axis_update(&stick_ax[0], sx);
-    int py = stick_axis_update(&stick_ax[1], sy);
+    int ax = stick_axis_update(&stick_ax[0], sx);
+    int ay = stick_axis_update(&stick_ax[1], sy);
+    // stick is mounted rotated: map the ADC channels to screen directions
+#if HELD_STICK_SWAP_XY
+    int px = ay, py = ax;
+#else
+    int px = ax, py = ay;
+#endif
 #if HELD_STICK_INVERT_X
     px = -px;
 #endif
@@ -350,6 +411,10 @@ int held_lcd_init(void) {
 
     lcd_backlight_init();
     lcd_backlight_set(backlight_level);
+
+    // Calibrate the analog stick centre now: a few hundred ms after power-on
+    // (panel reset), the supplies have settled.
+    held_stick_recalibrate();
 
     printf("LCD: %dx%d, %d FB, sys %lu Hz\n", LCD_W, LCD_H, HELD_LCD_NUM_FB,
            (unsigned long)clock_get_hz(clk_sys));

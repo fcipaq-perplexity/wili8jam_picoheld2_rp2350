@@ -49,9 +49,9 @@
 
 /* ---------------------------------------------------------------------------
  * Analog stick
- * Centre is calibrated at boot (don't touch the stick while switching on),
- * min/max are tracked while running. Deflection is scaled per side to
- * -100..100 %.
+ * Centre is calibrated at boot (don't touch the stick while switching on)
+ * and follows the rest position while running; min/max are tracked while
+ * running. Deflection is scaled per side to -100..100 %.
  * ------------------------------------------------------------------------- */
 // Stick also drives the PICO-8 direction buttons
 #ifndef HELD_USE_ANALOG_STICK
@@ -75,9 +75,35 @@
 #ifndef HELD_STICK_GLITCH_TOL
 #define HELD_STICK_GLITCH_TOL   100
 #endif
-// Direction: after inversion, + must be right (X) / down (Y)
+// Boot calibration: samples per axis and max. allowed spread (ADC counts);
+// a larger spread (stick touched / supply not settled) repeats the measurement
+#ifndef HELD_STICK_CAL_SAMPLES
+#define HELD_STICK_CAL_SAMPLES   64
+#endif
+#ifndef HELD_STICK_CAL_SPREAD
+#define HELD_STICK_CAL_SPREAD    80
+#endif
+// Centre tracking: if the stick moves less than STILL_TOL counts per sample
+// for RECENTRE_SAMPLES samples (one sample per frame) while within
+// RECENTRE_PCT of the centre, the centre is pulled towards the rest position.
+// Set RECENTRE_SAMPLES to 0x7fffffff to disable.
+#ifndef HELD_STICK_STILL_TOL
+#define HELD_STICK_STILL_TOL     40
+#endif
+#ifndef HELD_STICK_RECENTRE_SAMPLES
+#define HELD_STICK_RECENTRE_SAMPLES 20
+#endif
+#ifndef HELD_STICK_RECENTRE_PCT
+#define HELD_STICK_RECENTRE_PCT  45
+#endif
+// Orientation. The stick is mounted rotated: the ADC "X" channel is the
+// vertical axis and "Y" the horizontal one -> swap. Inversion is applied
+// after the swap; + must be right (X) / down (Y).
+#ifndef HELD_STICK_SWAP_XY
+#define HELD_STICK_SWAP_XY        1
+#endif
 #ifndef HELD_STICK_INVERT_X
-#define HELD_STICK_INVERT_X       1
+#define HELD_STICK_INVERT_X       0
 #endif
 #ifndef HELD_STICK_INVERT_Y
 #define HELD_STICK_INVERT_Y       0
