@@ -40,9 +40,8 @@
 // ---- analog stick ---------------------------------------------------------
 // Centre: calibrated from many samples once the supplies have settled
 // (held_stick_recalibrate(), called after the LCD is up; the stick must not
-// be touched while booting). While running, the centre follows the rest
-// position whenever the stick is held still near the centre (mechanical
-// hysteresis, drift of ageing sticks).
+// be touched while booting). Optionally (HELD_STICK_RECENTRE, off by default)
+// the centre follows the rest position while the stick is held still near it.
 // Range: the extremes start at centre +/- HELD_STICK_INIT_RANGE and grow
 // while running. A new extreme is only taken over if seen in two consecutive
 // samples (a single ADC glitch can't widen the range).
@@ -110,7 +109,7 @@ static int stick_axis_update(stick_axis_t *a, int v) {
     a->last_v = v;
 
     int pct = stick_axis_pct(a, v);
-    if (a->still_cnt >= HELD_STICK_RECENTRE_SAMPLES &&
+    if (HELD_STICK_RECENTRE && a->still_cnt >= HELD_STICK_RECENTRE_SAMPLES &&
         pct > -HELD_STICK_RECENTRE_PCT && pct < HELD_STICK_RECENTRE_PCT) {
         int diff = v - a->centre;
         // move 1/4 of the way per sample (at least 1 count)

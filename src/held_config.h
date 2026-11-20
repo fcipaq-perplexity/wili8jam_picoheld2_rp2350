@@ -39,19 +39,20 @@
 #endif
 
 /* ---------------------------------------------------------------------------
- * SELECT glitch filter: SELECT only counts as pressed after this many
- * consecutive pressed samples (one sample per input poll, i.e. per frame).
+ * SELECT glitch filter: SELECT (GPIO 23) picks up glitches from the ADC
+ * activity nearby. It only counts as pressed after this many consecutive
+ * pressed samples (one sample per input poll, i.e. per frame: 8 = ~130 ms at
+ * 60 fps, ~270 ms at 30 fps). SELECT is only used for slow system combos.
  * 1 = no filtering.
  * ------------------------------------------------------------------------- */
 #ifndef HELD_SEL_CONSECUTIVE
-#define HELD_SEL_CONSECUTIVE    3
+#define HELD_SEL_CONSECUTIVE    8
 #endif
 
 /* ---------------------------------------------------------------------------
  * Analog stick
- * Centre is calibrated at boot (don't touch the stick while switching on)
- * and follows the rest position while running; min/max are tracked while
- * running. Deflection is scaled per side to -100..100 %.
+ * Centre is calibrated at boot (don't touch the stick while switching on);
+ * min/max are tracked while running. Deflection is scaled per side to -100..100 %.
  * ------------------------------------------------------------------------- */
 // Stick also drives the PICO-8 direction buttons
 #ifndef HELD_USE_ANALOG_STICK
@@ -83,10 +84,13 @@
 #ifndef HELD_STICK_CAL_SPREAD
 #define HELD_STICK_CAL_SPREAD    80
 #endif
-// Centre tracking: if the stick moves less than STILL_TOL counts per sample
-// for RECENTRE_SAMPLES samples (one sample per frame) while within
-// RECENTRE_PCT of the centre, the centre is pulled towards the rest position.
-// Set RECENTRE_SAMPLES to 0x7fffffff to disable.
+// Centre tracking (off by default): if the stick moves less than STILL_TOL
+// counts per sample for RECENTRE_SAMPLES samples (one sample per frame) while
+// within RECENTRE_PCT of the centre, the centre is pulled towards the rest
+// position. Can be provoked by holding the stick slightly off-centre.
+#ifndef HELD_STICK_RECENTRE
+#define HELD_STICK_RECENTRE       0
+#endif
 #ifndef HELD_STICK_STILL_TOL
 #define HELD_STICK_STILL_TOL     40
 #endif
