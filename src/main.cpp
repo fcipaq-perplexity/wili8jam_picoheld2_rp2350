@@ -6,11 +6,8 @@
 #include "hardware/vreg.h"
 #include "hardware/watchdog.h"
 #include "psram.h"
-#include "pio_usb.h"
-#include "usb-host/fwUSBHost.h"
 
 extern "C" {
-#include "tusb.h"
 #include "lua.h"
 #include "lauxlib.h"
 #include "lualib.h"
@@ -18,7 +15,6 @@ extern "C" {
 #include "fatfs/ff.h"
 #include "sdcard.h"
 #include "gfx.h"
-#include "dvi.h"
 #include "input.h"
 #include "audio.h"
 #include "p8_preprocess.h"
@@ -26,66 +22,8 @@ extern "C" {
 #include "p8_sfx.h"
 #include "p8_cart.h"
 #include "p8_console.h"
-#include "p8_editor.h"
+#include "held_hw.h"
 }
-
-// TinyUSB debug printf (declared in tusb_config.h)
-extern "C" int cdc_debug_printf(const char* fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    int ret = vprintf(fmt, args);
-    va_end(args);
-    return ret;
-}
-
-// TinyUSB debug ring buffer — captures debug output, dumped via 'info'
-static constexpr int TUSB_DBG_BUF_SIZE = 4096;
-static char tusb_dbg_buf[TUSB_DBG_BUF_SIZE];
-static int tusb_dbg_pos = 0;
-static bool tusb_dbg_wrapped = false;
-
-extern "C" int tusb_debug_buffered_printf(const char* fmt, ...) {
-    char tmp[256];
-    va_list args;
-    va_start(args, fmt);
-    int n = vsnprintf(tmp, sizeof(tmp), fmt, args);
-    va_end(args);
-    if (n <= 0) return n;
-    if (n > (int)sizeof(tmp) - 1) n = sizeof(tmp) - 1;
-    // Filter out device-side (USBD/CDC) noise — only keep host-side logs
-    if (strncmp(tmp, "USBD", 4) == 0 || strncmp(tmp, "  CDC", 5) == 0 ||
-        strncmp(tmp, "  Queue", 7) == 0)
-        return n;
-    for (int i = 0; i < n; i++) {
-        tusb_dbg_buf[tusb_dbg_pos] = tmp[i];
-        tusb_dbg_pos = (tusb_dbg_pos + 1) % TUSB_DBG_BUF_SIZE;
-        if (tusb_dbg_pos == 0) tusb_dbg_wrapped = true;
-    }
-    return n;
-}
-
-static void tusb_dbg_dump() {
-    if (!tusb_dbg_wrapped && tusb_dbg_pos == 0) {
-        printf("(no tusb debug output)\n");
-        return;
-    }
-    printf("--- tusb debug log ---\n");
-    if (tusb_dbg_wrapped) {
-        // Print from current position to end, then start to current position
-        fwrite(tusb_dbg_buf + tusb_dbg_pos, 1, TUSB_DBG_BUF_SIZE - tusb_dbg_pos, stdout);
-        fwrite(tusb_dbg_buf, 1, tusb_dbg_pos, stdout);
-    } else {
-        fwrite(tusb_dbg_buf, 1, tusb_dbg_pos, stdout);
-    }
-    printf("--- end tusb debug ---\n");
-}
-
-static void tusb_dbg_clear() {
-    tusb_dbg_pos = 0;
-    tusb_dbg_wrapped = false;
-}
-
-extern fwUSBHost obUSBHost;
 
 static tlsf_t psram_tlsf;
 static size_t psram_total_size;
@@ -448,10 +386,8 @@ struct help_entry {
 
 static const struct help_entry help_entries[] = {
     {"load", "load <cart>",
-     {"load a cartridge by name.", "also loads code into editor.",
+     {"load a cartridge by name.",
       "  load mycart", "  load carts/jelpi", NULL}},
-    {"save", "save <cart>",
-     {"save editor code as .p8 cart.", "  save mycart", NULL}},
     {"run", "run cart",
      {"run the currently loaded cart.", "call load first.", NULL}},
     {"ls", "ls [dir]",
@@ -464,14 +400,14 @@ static const struct help_entry help_entries[] = {
      {"delete a file. appends .p8", "if no exact match.", "  rm mycart", NULL}},
     {"cls", "cls",
      {"clear the screen.", NULL}},
-    {"edit", "edit [cart]",
-     {"open the code editor.", "esc toggles editor/terminal.", NULL}},
     {"reboot", "reboot",
      {"restart the system.", NULL}},
     {"info", "info",
      {"show system information.", NULL}},
     {"help", "help [cmd]",
      {"show this help, or help on", "a specific command.", NULL}},
+    {"exit", "select+start",
+     {"leave the repl and go back", "to the cart picker.", NULL}},
     {NULL, NULL, {NULL}}
 };
 
@@ -525,44 +461,17 @@ static int lua_info(lua_State *L) {
     unsigned fk = (unsigned)(stats.free_bytes / 1024);
     unsigned tk = (unsigned)(psram_total_size / 1024);
     unsigned mhz = (unsigned)(clock_get_hz(clk_sys) / 1000000);
-    const char *fmt = "wili8jam / fruit jam\nrp2350b @ %u mhz\npsram: %uk free / %uk\n";
+    const char *fmt = "wili8jam / pico held 2\nrp2350b @ %u mhz\npsram: %uk free / %uk\n";
     printf(fmt, mhz, fk, tk);
     p8_console_printf(fmt, mhz, fk, tk);
 
-    // USB HID device info
-    auto &hid = obUSBHost.m_obHID;
-    printf("usb: kbd=%d mouse=%d ctrl=%d xinput=%d generic=%d\n",
-        hid.getKeyboardCount(), hid.getMouseCount(),
-        hid.getControllerCount(), obUSBHost.m_obXInput.getMountedCount(),
-        hid.getGenericCount());
-    p8_console_printf("usb: kbd=%d mouse=%d ctrl=%d xinput=%d generic=%d\n",
-        hid.getKeyboardCount(), hid.getMouseCount(),
-        hid.getControllerCount(), obUSBHost.m_obXInput.getMountedCount(),
-        hid.getGenericCount());
-
-    // Show mounted HID interface details
-    for (uint8_t addr = 1; addr <= CFG_TUH_DEVICE_MAX; addr++) {
-        if (!tuh_mounted(addr)) continue;
-        uint8_t itf_count = tuh_hid_itf_get_count(addr);
-        for (uint8_t itf = 0; itf < itf_count; itf++) {
-            uint8_t proto = tuh_hid_interface_protocol(addr, itf);
-            printf("  dev %d itf %d: proto=%d (%s)\n", addr, itf, proto,
-                proto == 1 ? "keyboard" : proto == 2 ? "mouse" : "none/other");
-        }
-    }
-
-    // PIO-USB root port diagnostic
-    {
-        extern root_port_t pio_usb_root_port[];
-        root_port_t *root = &pio_usb_root_port[0];
-        printf("pio-usb: init=%d connected=%d fullspeed=%d suspended=%d event=%d\n",
-            root->initialized, root->connected, root->is_fullspeed,
-            root->suspended, root->event);
-    }
-
-    // Dump TinyUSB debug ring buffer
-    tusb_dbg_dump();
-    tusb_dbg_clear();
+    // Pico Held 2 status
+    const char *bfmt = "battery: %d%% (%s)\nscreen: %s\n";
+    int bl = held_battery_level();
+    const char *src = held_on_external_power() ? "usb" : "bat";
+    const char *sm = held_lcd_get_scale_mode() == HELD_SCALE_FIT ? "fit" : "crop";
+    printf(bfmt, bl, src, sm);
+    p8_console_printf(bfmt, bl, src, sm);
 
     p8_console_draw();
     gfx_flip();
@@ -721,93 +630,65 @@ static bool try_autorun(lua_State *L) {
     return true;
 }
 
+// Shown when no SD card is mounted. Returns when Enter arrives on USB serial
+// (-> REPL). Inserting a card restarts the system.
+static void no_sd_screen() {
+    while (true) {
+        input_update();
+        int ch = getchar_timeout_us(0);
+        if (ch == '\r' || ch == '\n') return;
+        if (!gpio_get(PICOHELD2_SD_DET_PIN)) {   // low = card inserted
+            gfx_cls(0);
+            gfx_print_w("sd card found,", 8, 56, 7, 4);
+            gfx_print_w("restarting...", 8, 63, 7, 4);
+            gfx_flip();
+            sleep_ms(500);
+            watchdog_reboot(0, 0, 0);
+            while (true) tight_loop_contents();
+        }
+        gfx_cls(1);
+        gfx_print_w("wili8jam", 8, 8, 7, 4);
+        gfx_print_w("no sd card found.", 8, 40, 8, 4);
+        gfx_print_w("insert a fat32 card with", 8, 52, 6, 4);
+        gfx_print_w(".p8 / .p8.png carts.", 8, 59, 6, 4);
+        gfx_print_w("usb serial: lua repl", 8, 80, 13, 4);
+        gfx_print_w("hold r: power off", 8, 87, 13, 4);
+        gfx_flip();
+        sleep_ms(50);
+    }
+}
+
 static constexpr int LINE_BUF_SIZE = 256;
 
 int main() {
+    // Pico Held 2: latch the power switch first, or the device turns off
+    // as soon as the power button is released.
+    held_hw_early_init();
+
     // Overclock to 252 MHz (2x default). VCO=1260MHz (12*105), postdiv 5/1.
-    // Requires 1.3V core voltage. Tested and stable.
+    // Requires 1.3V core voltage. Must happen BEFORE the LCD, audio and PSRAM
+    // are set up: their PIO / QMI clock dividers are derived from clk_sys.
     vreg_set_voltage(VREG_VOLTAGE_1_30);
     sleep_ms(10); // let voltage stabilize
     set_sys_clock_pll(1260000000, 5, 1); // VCO=1260MHz, postdiv1=5, postdiv2=1 → 252MHz
 
-    // Enable 5V VBUS power to USB-A host port (GPIO 11 controls power switch)
-    gpio_init(11);
-    gpio_set_dir(11, GPIO_OUT);
-    gpio_put(11, 1);
-
-    // Configure PIO-USB host on port 1 (D+ = GPIO1, D- = GPIO2).
-    pio_usb_configuration_t pio_cfg = PIO_USB_DEFAULT_CONFIG;
-    pio_cfg.pin_dp = 1;
-    pio_cfg.tx_ch = 9;
-    tuh_configure(1, TUH_CFGID_RPI_PIO_USB_CONFIGURATION, &pio_cfg);
-
-    // tusb_init() called inside here inits device CDC (port 0) + PIO-USB host (port 1)
+    // USB CDC serial: debug output + Lua REPL
     stdio_init_all();
 
-    // Start DVI display immediately so screen is live during boot
+    // Start the LCD first: its config SPI shares GPIO 34 with the SD card
     gfx_init();
-    dvi_init(gfx_get_dvi_buffer());
+    int lcd_err = held_lcd_init();
     p8_console_init();
-    p8_console_print("wili8jam 0.10\n");
+    p8_console_print("wili8jam 0.10 / pico held 2\n");
     p8_console_draw();
     gfx_flip();
 
-    // Register keyboard callback for input state tracking
-    obUSBHost.m_obHID.getKeyboard().setKeyCallback(input_key_callback);
-
-    // Register modifier key polling so Ctrl/Shift/Alt state is synced each frame
-    input_set_modifier_poll([]() -> uint8_t {
-        return obUSBHost.m_obHID.getKeyboard().getModifiers();
-    });
-
-    // Register mouse polling function — always update when mounted
-    // (getDeltas resets accumulators, so we must always pass them through)
-    input_set_mouse_poll([]() {
-        auto &mouse = obUSBHost.m_obHID.getMouse();
-        if (mouse.isAnyMounted()) {
-            int32_t dx, dy, wheel;
-            mouse.getDeltas(&dx, &dy, &wheel);
-            input_mouse_update(dx, dy, wheel, mouse.getButtons());
-        }
-    });
-
-    // Register controller callback — player assigned by mount order
-    // Sony controllers (DualSense/DualShock) use a different report format
-    obUSBHost.m_obHID.getController().setReportCallback(
-        [](uint8_t dev_addr, uint8_t instance, uint8_t const *report, uint16_t len) {
-            auto &ctrl = obUSBHost.m_obHID.getController();
-            int player = ctrl.getPlayerForDevice(dev_addr, instance);
-            if (player > 1) player = 1; // PICO-8 supports 2 players max
-            // Check VID to route Sony controllers to dedicated parser
-            uint16_t vid = 0, pid = 0;
-            tuh_vid_pid_get(dev_addr, &vid, &pid);
-            if (vid == SONY_VID)
-                input_dualsense_report(report, len, player, pid);
-            else
-                input_gamepad_report(report, len, player);
-        });
-
-    // NOTE: Generic HID devices are NOT routed to input_gamepad_report.
-    // Many keyboards expose a secondary HID interface (consumer control)
-    // with protocol=NONE that gets classified as "generic". Feeding those
-    // reports through the gamepad parser causes phantom directional input
-    // (e.g., constant left) because zero-filled reports are misinterpreted
-    // as axis values. Only properly-detected controllers (via isController)
-    // should produce gamepad input.
-
-    // Register XInput (Xbox) controller callback
-    obUSBHost.m_obXInput.setReportCallback(
-        [](uint8_t dev_addr, uint8_t instance, xinput_gamepad_t const *pad) {
-            int player = obUSBHost.m_obXInput.getPlayerForDevice(dev_addr, instance);
-            if (player > 1) player = 1;
-            input_xinput_update(pad->wButtons, pad->sThumbLX, pad->sThumbLY, player);
-        });
-
     printf("\n");
     printf("========================================\n");
-    printf("  wili8jam — Lua 5.4.7 on Fruit Jam\n");
+    printf("  wili8jam — Lua 5.4.7 on Pico Held 2\n");
     printf("  RP2350B @ %u MHz | USB Serial REPL\n", (unsigned)(clock_get_hz(clk_sys) / 1000000));
     printf("========================================\n");
+    if (lcd_err) printf("ERROR: LCD init failed (%d)\n", lcd_err);
 
     // Init PSRAM
     psram_total_size = setup_psram();
@@ -815,7 +696,7 @@ int main() {
         p8_console_print("err: no psram!\n");
         p8_console_draw(); gfx_flip();
         printf("ERROR: PSRAM not detected!\n");
-        while (true) tight_loop_contents();
+        while (true) { input_update(); sleep_ms(20); }  // hold R still powers off
     }
     printf("PSRAM: %u KB detected\n", (unsigned)(psram_total_size / 1024));
     p8_console_printf("psram: %u kb\n", (unsigned)(psram_total_size / 1024));
@@ -838,9 +719,6 @@ int main() {
     // Init cart loader
     p8_cart_init(psram_tlsf);
 
-    // Init editor
-    p8_editor_init(psram_tlsf);
-
     // Init SD card
     printf("SD card: ");
     if (f_mount(&fatfs, "", 1) == FR_OK) {
@@ -859,9 +737,7 @@ int main() {
     }
     p8_console_draw(); gfx_flip();
 
-    printf("DVI: 640x480 output started\n");
-
-    // Init audio (codec + I2S + DMA)
+    // Init audio (I2S + DMA)
     if (audio_init()) {
         printf("Audio: I2S + DAC ready\n");
         p8_console_print("audio: ready\n");
@@ -873,29 +749,7 @@ int main() {
     // Init PICO-8 SFX/music engine (wavetables + pitch table)
     p8_sfx_init();
 
-    // Poll USB host to enumerate devices already plugged in at boot.
-    // Xbox One controllers need multiple round-trips for power-on + init handshake,
-    // and PIO-USB full-speed enumeration is slower than native USB.
-    // Poll for up to 3 seconds, exit early once a device is detected.
-    for (int i = 0; i < 300; i++) {
-        tuh_task();
-        sleep_ms(10);
-        // Exit early once any HID or XInput device is mounted
-        if (i > 50 && (obUSBHost.m_obHID.isKeyboardMounted() ||
-                       obUSBHost.m_obHID.isControllerMounted() ||
-                       obUSBHost.m_obXInput.isAnyMounted() ||
-                       obUSBHost.m_obHID.getGenericCount() > 0)) {
-            printf("[USB] Device detected after %d ms\n", i * 10);
-            break;
-        }
-    }
-    printf("[USB] Boot scan complete: kbd=%d ctrl=%d xinput=%d generic=%d\n",
-        obUSBHost.m_obHID.getKeyboardCount(),
-        obUSBHost.m_obHID.getControllerCount(),
-        obUSBHost.m_obXInput.getMountedCount(),
-        obUSBHost.m_obHID.getGenericCount());
-
-    printf("Ready. Type Lua code, press Enter.\n");
+    printf("Ready. Press Enter for the Lua REPL.\n");
     p8_console_print("ready.\n");
     p8_console_draw();
     gfx_flip();
@@ -912,9 +766,6 @@ int main() {
 
     // Register cart lifecycle functions (load, reset, run)
     p8_cart_register(L);
-
-    // Register editor
-    p8_editor_register(L);
 
     // Register console print (overrides p8_api's print for REPL mode)
     p8_console_register(L);
@@ -944,7 +795,6 @@ int main() {
         lua_register(L, "mkdir", lua_mkdir);
         lua_register(L, "rm", lua_rm);
         lua_register(L, "cd", lua_cd);
-        try_autorun(L);
     }
     lua_register(L, "help", lua_help);
     lua_register(L, "info", lua_info);
@@ -986,35 +836,56 @@ int main() {
         gfx_flip();
     };
 
-    while (true) {
+    // Main loop: cart picker <-> carts. Enter on the USB serial port opens the
+    // Lua REPL; SELECT+START leaves it again.
+    bool first_round = true;
+    for (;;) {
+    if (sd_mounted) {
+        if (first_round) {
+            first_round = false;
+            // /main.p8 (or .p8.png / main.lua) on the SD card runs at boot
+            if (try_autorun(L)) {
+                const char *err = p8_cart_last_error();
+                if (err) p8_cart_error_screen("cart error", err);
+            }
+        }
+        const char *path = p8_cart_picker();
+        if (path) {
+            p8_cart_run(L, path);
+            const char *err = p8_cart_last_error();
+            if (err) p8_cart_error_screen("cart error", err);
+            continue;
+        }
+    } else {
+        no_sd_screen();
+    }
+
+    // ---- Lua REPL (USB serial) ----
+    // The console uses the full 128x128 screen: show all of it while in the REPL
+    int saved_scale = held_lcd_get_scale_mode();
+    held_lcd_set_scale_mode(HELD_SCALE_FIT);
+    bool leave_repl = false;
+    skip_console_redraw = false;
+    input_flush();
+    printf("\nLua REPL - SELECT+START on the device returns to the cart picker.\n");
+    p8_console_print("repl (sel+start: exit)\n");
+    while (!leave_repl) {
         printf("> ");
 
         pos = 0;
         while (pos < LINE_BUF_SIZE - 1) {
-            // Poll USB host while waiting for serial input
-            tuh_task();
-
             // Redraw console on screen periodically
             repl_redraw();
 
-            // Check for ESC key → toggle to editor
+            // SELECT+START -> back to the cart picker
             input_update();
-            if (input_key(0x29)) { // HID_KEY_ESCAPE
-                input_flush();
-                p8_editor_enter();
-                // Wait for ESC release (debounce from editor toggle)
-                while (input_key(0x29)) { tuh_task(); input_update(); sleep_ms(10); }
-                skip_console_redraw = false;
-                p8_console_draw();
-                gfx_flip();
-                printf("> ");
-                continue;
+            if (input_exit_requested()) {
+                leave_repl = true;
+                break;
             }
 
-            // Read from serial OR USB keyboard
+            // Read from USB serial
             int c = getchar_timeout_us(0);
-            if (c == PICO_ERROR_TIMEOUT)
-                c = input_getchar();
             if (c < 0) {
                 sleep_ms(16);
                 continue;
@@ -1035,6 +906,7 @@ int main() {
             putchar(c);
         }
         line[pos] = '\0';
+        if (leave_repl) break;
 
         // Skip empty lines
         if (pos == 0) continue;
@@ -1185,6 +1057,9 @@ int main() {
         skip_console_redraw = true;
         gfx_flip();
     }
+    printf("\nleaving REPL\n");
+    held_lcd_set_scale_mode(saved_scale);
+    } // main loop
 
     lua_close(L);
     return 0;

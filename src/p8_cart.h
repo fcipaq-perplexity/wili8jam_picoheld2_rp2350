@@ -56,6 +56,16 @@ int p8_cart_reload(int dest, int src, int len, const char *filename);
 // Returns 0 on success, -1 on error.
 int p8_cart_cstore(int dest, int src, int len, const char *filename);
 
+// Cart picker / SD card browser. Returns the full path of the chosen cart,
+// or NULL if Enter was received on the USB serial port (-> drop to the REPL).
+const char *p8_cart_picker(void);
+
+// Error of the last p8_cart_run() (load or runtime error), NULL if none.
+const char *p8_cart_last_error(void);
+
+// Full-screen message, waits for A/B.
+void p8_cart_error_screen(const char *title, const char *msg);
+
 #ifdef __cplusplus
 }
 #endif

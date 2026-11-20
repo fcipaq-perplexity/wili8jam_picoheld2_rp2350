@@ -11,13 +11,21 @@
 #include "hardware/regs/qmi.h"
 #include "hardware/regs/xip.h"
 
-#define FRUIT_JAM_PSRAM_CS 47
+// Pico Held 2: APS6404L-3SQR (8 MB) on XIP_CS1 = GPIO 0 (see boards/picoheld_2.h)
+#define PSRAM_CS_PIN PICOHELD2_PSRAM_CS_PIN
 #define PSRAM_BASE 0x11000000
+
+// Max. PSRAM SCK. The APS6404L does 84 MHz for linear bursts that cross a page,
+// which is what the XIP cache does. 252 MHz / 3 = 84 MHz.
+// If you see PSRAM corruption, try 63000000 (divider 4).
+#ifndef PSRAM_MAX_FREQ_HZ
+#define PSRAM_MAX_FREQ_HZ 84000000
+#endif
 
 // Activate PSRAM and return detected size in bytes (0 if not found).
 // Adapted from CircuitPython / rpSRAMExternalTester.cpp
 static size_t __no_inline_not_in_flash_func(setup_psram)(void) {
-    gpio_set_function(FRUIT_JAM_PSRAM_CS, GPIO_FUNC_XIP_CS1);
+    gpio_set_function(PSRAM_CS_PIN, GPIO_FUNC_XIP_CS1);
 
     size_t psram_size = 0;
     uint32_t save_irq_status = save_and_disable_interrupts();
@@ -84,15 +92,17 @@ static size_t __no_inline_not_in_flash_func(setup_psram)(void) {
     qmi_hw->direct_csr &= ~(QMI_DIRECT_CSR_ASSERT_CS1N_BITS | QMI_DIRECT_CSR_EN_BITS);
 
     // Configure QMI for PSRAM access.
-    // CLKDIV scales with sys clock to keep PSRAM at ~63 MHz.
-    // (2 @ 126 MHz = 63 MHz, 4 @ 252 MHz = 63 MHz)
-    uint32_t psram_clkdiv = (clock_get_hz(clk_sys) + 62999999) / 63000000;
+    // CLKDIV scales with sys clock to stay <= PSRAM_MAX_FREQ_HZ
+    // (3 @ 252 MHz = 84 MHz). RX delay follows the divider (as in CircuitPython).
+    uint32_t psram_clkdiv = (clock_get_hz(clk_sys) + PSRAM_MAX_FREQ_HZ - 1) / PSRAM_MAX_FREQ_HZ;
     if (psram_clkdiv < 2) psram_clkdiv = 2;
+    uint32_t psram_rxdelay = psram_clkdiv;
+    if (clock_get_hz(clk_sys) / psram_clkdiv > 100000000) psram_rxdelay++;
     qmi_hw->m[1].timing =
         QMI_M0_TIMING_PAGEBREAK_VALUE_1024 << QMI_M0_TIMING_PAGEBREAK_LSB |
         3 << QMI_M0_TIMING_SELECT_HOLD_LSB |
         1 << QMI_M0_TIMING_COOLDOWN_LSB |
-        2 << QMI_M0_TIMING_RXDELAY_LSB |
+        psram_rxdelay << QMI_M0_TIMING_RXDELAY_LSB |
         29 << QMI_M0_TIMING_MAX_SELECT_LSB |
         12 << QMI_M0_TIMING_MIN_DESELECT_LSB |
         psram_clkdiv << QMI_M0_TIMING_CLKDIV_LSB;

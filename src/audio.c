@@ -1,6 +1,5 @@
 #include "audio.h"
 #include "p8_sfx.h"
-#include "hardware/i2c.h"
 #include "hardware/pio.h"
 #include "hardware/dma.h"
 #include "hardware/irq.h"
@@ -11,16 +10,11 @@
 #include <string.h>
 #include <math.h>
 
-// --- Pin assignments (Fruit Jam) ---
-#define I2S_DIN_PIN   24
-#define I2S_BCLK_PIN  26
-// WS = BCLK + 1 = 27
-
-#define I2C_SDA_PIN   20
-#define I2C_SCL_PIN   21
-#define CODEC_RESET_PIN 22
-
-#define DAC_I2C_ADDR  0x18
+// --- Pin assignments (Pico Held 2, see boards/picoheld_2.h) ---
+#define I2S_DIN_PIN     PICOHELD2_I2S_DATA_PIN   // 39
+#define I2S_LRCLK_PIN   PICOHELD2_I2S_LRCLK_PIN  // 37 (side-set bit 0)
+// BCLK = LRCLK + 1 = 38 (side-set bit 1)
+#define I2S_SND_EN_PIN  PICOHELD2_SND_EN_PIN     // 40, amplifier enable
 
 // --- Audio parameters ---
 #define SAMPLE_RATE   22050
@@ -54,127 +48,16 @@ static int dma_ch_a, dma_ch_b;
 // When true, ISR fills buffers with silence instead of mixing (avoids PSRAM access)
 static volatile bool audio_paused = false;
 
-// --- Codec I2C helpers ---
+// --- Output enable / software volume (Pico Held 2 has no codec registers) ---
 
-static void codec_write_reg(uint8_t reg, uint8_t value) {
-    uint8_t buf[2] = {reg, value};
-    i2c_write_timeout_us(i2c0, DAC_I2C_ADDR, buf, 2, false, 1000);
-}
+// Volume as a 0..256 multiplier, indexed by audio_volume() level 0-7
+static const uint16_t vol_scale[8] = { 0, 16, 32, 48, 72, 104, 152, 256 };
+static volatile uint16_t master_vol = 152;  // level 6 by default (speaker is loud)
 
-static uint8_t codec_read_reg(uint8_t reg) {
-    uint8_t buf = reg;
-    i2c_write_timeout_us(i2c0, DAC_I2C_ADDR, &buf, 1, true, 1000);
-    i2c_read_timeout_us(i2c0, DAC_I2C_ADDR, &buf, 1, false, 1000);
-    return buf;
-}
-
-static void codec_modify_reg(uint8_t reg, uint8_t mask, uint8_t value) {
-    uint8_t cur = codec_read_reg(reg);
-    codec_write_reg(reg, (cur & ~mask) | (value & mask));
-}
-
-static void codec_set_page(uint8_t page) {
-    codec_write_reg(0x00, page);
-}
-
-// --- Codec init (adapted from fruitjam-doom i_main.c) ---
-
-static void codec_init(void) {
-    // Release codec from reset
-    gpio_init(CODEC_RESET_PIN);
-    gpio_set_dir(CODEC_RESET_PIN, GPIO_OUT);
-    gpio_put(CODEC_RESET_PIN, true);
-
-    // I2C0 at 100kHz
-    i2c_init(i2c0, 100000);
-    gpio_set_function(I2C_SDA_PIN, GPIO_FUNC_I2C);
-    gpio_set_function(I2C_SCL_PIN, GPIO_FUNC_I2C);
-    sleep_ms(1000);
-
-    // Soft reset
-    codec_write_reg(0x01, 0x01);
-    sleep_ms(10);
-
-    // Interface: I2S, 16-bit
-    codec_modify_reg(0x1B, 0xC0, 0x00);
-    codec_modify_reg(0x1B, 0x30, 0x00);
-
-    // Clock MUX: PLL from BCLK
-    codec_modify_reg(0x04, 0x03, 0x03);
-    codec_modify_reg(0x04, 0x0C, 0x04);
-
-    // PLL J=0x20, D=0
-    codec_write_reg(0x06, 0x20);
-    codec_write_reg(0x08, 0x00);
-    codec_write_reg(0x07, 0x00);
-
-    // PLL P/R
-    codec_modify_reg(0x05, 0x0F, 0x02);
-    codec_modify_reg(0x05, 0x70, 0x10);
-
-    // NDAC=8, enable
-    codec_modify_reg(0x0B, 0x7F, 0x08);
-    codec_modify_reg(0x0B, 0x80, 0x80);
-
-    // MDAC=2, enable
-    codec_modify_reg(0x0C, 0x7F, 0x02);
-    codec_modify_reg(0x0C, 0x80, 0x80);
-
-    // NADC=8, enable
-    codec_modify_reg(0x12, 0x7F, 0x08);
-    codec_modify_reg(0x12, 0x80, 0x80);
-
-    // MADC=2, enable
-    codec_modify_reg(0x13, 0x7F, 0x02);
-    codec_modify_reg(0x13, 0x80, 0x80);
-
-    // PLL power up
-    codec_modify_reg(0x05, 0x80, 0x80);
-
-    // Headset detect config
-    codec_set_page(1);
-    codec_modify_reg(0x2E, 0xFF, 0x0B);
-    codec_set_page(0);
-    codec_modify_reg(0x43, 0x80, 0x80);
-    codec_modify_reg(0x30, 0x80, 0x80);
-    codec_modify_reg(0x33, 0x3C, 0x14);
-
-    // DAC power on (left + right)
-    codec_modify_reg(0x3F, 0xC0, 0xC0);
-
-    // DAC routing
-    codec_set_page(1);
-    codec_modify_reg(0x23, 0xC0, 0x40);
-    codec_modify_reg(0x23, 0x0C, 0x04);
-
-    // DAC volume
-    codec_set_page(0);
-    codec_modify_reg(0x40, 0x0C, 0x00);  // unmute
-    codec_write_reg(0x41, 0x00);          // left DAC digital vol = 0dB
-    codec_write_reg(0x42, 0x00);          // right DAC digital vol = 0dB
-
-    // ADC setup
-    codec_modify_reg(0x51, 0x80, 0x80);
-    codec_modify_reg(0x52, 0x80, 0x00);
-    codec_write_reg(0x53, 0x68);
-
-    // HP driver + gain
-    codec_set_page(1);
-    codec_modify_reg(0x1F, 0xC0, 0xC0);
-    codec_modify_reg(0x28, 0x04, 0x04);
-    codec_modify_reg(0x29, 0x04, 0x04);
-    codec_write_reg(0x24, 0x0A);
-    codec_write_reg(0x25, 0x0A);
-    codec_modify_reg(0x28, 0x78, 0x40);
-    codec_modify_reg(0x29, 0x78, 0x40);
-
-    // Speaker amp
-    codec_modify_reg(0x20, 0x80, 0x80);
-    codec_modify_reg(0x2A, 0x04, 0x04);
-    codec_modify_reg(0x2A, 0x18, 0x08);
-    codec_write_reg(0x26, 0x0A);
-
-    codec_set_page(0);
+static void amp_init(void) {
+    gpio_init(I2S_SND_EN_PIN);
+    gpio_set_dir(I2S_SND_EN_PIN, GPIO_OUT);
+    gpio_put(I2S_SND_EN_PIN, 0);  // keep muted until I2S clocks run
 }
 
 // --- Waveform generation (called from DMA ISR — must be in RAM) ---
@@ -240,6 +123,8 @@ static void __not_in_flash_func(fill_audio_buffer)(int32_t *buf, int count) {
         }
         // PICO-8 SFX engine channels
         mix += p8_sfx_mix_sample();
+        // Master volume (software, 0..256)
+        mix = (mix * (int32_t)master_vol) >> 8;
         // Clip to int16
         if (mix > 32767) mix = 32767;
         if (mix < -32768) mix = -32768;
@@ -271,9 +156,12 @@ static void __not_in_flash_func(audio_dma_irq_handler)(void) {
 // --- I2S PIO + DMA setup ---
 
 static void i2s_init(void) {
+    // GPIOs 37..39 are above 31: let this PIO address GPIO 16..47
+    pio_set_gpio_base(AUDIO_PIO, 16);
+
     // Load PIO program
     uint offset = pio_add_program(AUDIO_PIO, &audio_i2s_program);
-    audio_i2s_program_init(AUDIO_PIO, AUDIO_SM, offset, I2S_DIN_PIN, I2S_BCLK_PIN);
+    audio_i2s_program_init(AUDIO_PIO, AUDIO_SM, offset, I2S_DIN_PIN, I2S_LRCLK_PIN);
 
     // Clock divider: sys_clock / (22050 * 64)
     // At 126 MHz: 89.2857 → 89 + 73/256
@@ -356,8 +244,9 @@ bool audio_init(void) {
         channels[i].volume = 255;
     }
 
-    codec_init();
+    amp_init();
     i2s_init();
+    gpio_put(I2S_SND_EN_PIN, 1);  // unmute amplifier
     return true;
 }
 
@@ -387,24 +276,7 @@ void audio_volume(int level) {
     if (level < 0) level = 0;
     if (level > 7) level = 7;
 
-    // Map 0-7 to DAC digital volume register values
-    // Register range: 0x00 = 0dB, each step +0.5dB, negative = attenuation
-    // We map: 7=0dB(0x00), 6=-4dB(0xF8), 5=-8dB(0xF0), ... 0=mute(0x80)
-    static const uint8_t vol_map[8] = {
-        0x80,  // 0: mute
-        0xE0,  // 1: -16dB
-        0xE8,  // 2: -12dB
-        0xF0,  // 3: -8dB
-        0xF4,  // 4: -6dB
-        0xF8,  // 5: -4dB
-        0xFC,  // 6: -2dB
-        0x00,  // 7: 0dB
-    };
-
-    uint8_t vol = vol_map[level];
-    codec_set_page(0);
-    codec_write_reg(0x41, vol);  // Left DAC volume
-    codec_write_reg(0x42, vol);  // Right DAC volume
+    master_vol = vol_scale[level];
 }
 
 // --- Lua bindings ---

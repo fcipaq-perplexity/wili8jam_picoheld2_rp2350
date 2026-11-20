@@ -435,14 +435,16 @@ static int p8_ovalfill(lua_State *L) {
 }
 
 static int p8_flip(lua_State *L) {
-    (void)L;
     gfx_flip();
     if (!p8_gameloop_mode) {
-        // REPL mode: flip handles timing and input polling
+        // REPL mode / carts without _update: flip handles timing
         sleep_ms(33);
-        input_update();
     }
-    // In game loop mode, the game loop handles timing and input
+    // PICO-8 updates the buttons on flip(). This also lets carts that loop
+    // on flip() inside _update/_draw be left with SELECT+START.
+    input_update();
+    if (input_exit_requested())
+        return luaL_error(L, "stopped (select+start)");
     return 0;
 }
 

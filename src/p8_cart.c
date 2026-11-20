@@ -11,10 +11,10 @@
 #include "p8_preprocess.h"
 #include "p8_png.h"
 #include "p8_console.h"
-#include "p8_editor.h"
 #include "gfx.h"
 #include "input.h"
 #include "audio.h"
+#include "held_hw.h"
 
 #include "lua.h"
 #include "lauxlib.h"
@@ -24,6 +24,8 @@
 #include "pico/stdlib.h"
 
 #include <string.h>
+#include <strings.h>
+#include <stdlib.h>
 #include <stdio.h>
 
 static tlsf_t cart_tlsf;
@@ -384,6 +386,19 @@ static bool has_global_func(lua_State *L, const char *name) {
 }
 
 // Call a global function, return true on success
+// Last error of the running cart (shown by the cart picker)
+static char cart_last_error[160];
+
+static void cart_set_error(const char *err) {
+    // Leaving a cart with SELECT+START is not an error
+    if (strstr(err, "stopped (select+start)")) return;
+    snprintf(cart_last_error, sizeof(cart_last_error), "%s", err);
+}
+
+const char *p8_cart_last_error(void) {
+    return cart_last_error[0] ? cart_last_error : NULL;
+}
+
 static bool call_global(lua_State *L, const char *name) {
     lua_getglobal(L, name);
     if (!lua_isfunction(L, -1)) {
@@ -396,6 +411,7 @@ static bool call_global(lua_State *L, const char *name) {
         if (err) {
             printf("ERROR: %s\n", err);
             p8_console_printf("error: %s\n", err);
+            cart_set_error(err);
         }
         lua_pop(L, 1);
         return false;
@@ -426,9 +442,9 @@ static void cart_gameloop_inner(lua_State *L) {
         // Update input state
         input_update();
 
-        // Check for ESC key to break out of game loop
-        if (input_key(0x29)) { // HID_KEY_ESCAPE = 0x29
-            printf("ESC pressed, stopping cart\n");
+        // SELECT+START exits the cart
+        if (input_exit_requested()) {
+            printf("SELECT+START pressed, stopping cart\n");
             break;
         }
 
@@ -579,10 +595,6 @@ int p8_cart_load(lua_State *L, const char *path) {
     // Free lua code — we only loaded data sections
     tlsf_free(cart_tlsf, lua_code);
 
-    // Load code into editor buffer (.p8 only — .p8.png code is compressed)
-    if (!is_p8png(path))
-        p8_editor_load(path);
-
     printf("Loaded: %s\n", path);
     p8_console_printf("loaded %s\n", path);
     p8_console_draw(); gfx_flip();
@@ -592,6 +604,7 @@ int p8_cart_load(lua_State *L, const char *path) {
 
 int p8_cart_run(lua_State *L, const char *path) {
     printf("Loading cart: %s\n", path);
+    cart_last_error[0] = '\0';
 
     // Save current cart path for reset/run
     snprintf(current_cart_path, sizeof(current_cart_path), "%s", path);
@@ -666,6 +679,7 @@ int p8_cart_run(lua_State *L, const char *path) {
         if (err) {
             printf("ERROR: %s\n", err);
             p8_console_printf("error: %s\n", err);
+            cart_set_error(err);
             p8_console_draw(); gfx_flip();
         }
         lua_pop(L, 1);
@@ -678,6 +692,7 @@ int p8_cart_run(lua_State *L, const char *path) {
         if (err) {
             printf("ERROR: %s\n", err);
             p8_console_printf("error: %s\n", err);
+            cart_set_error(err);
             p8_console_draw(); gfx_flip();
         }
         lua_pop(L, 1);
@@ -1010,108 +1025,277 @@ int p8_cart_cstore(int dest, int src, int len, const char *filename) {
 // Cart picker UI
 // ============================================================
 
-#define MAX_CARTS 64
+// Cart picker / file browser (the Pico Held 2's main screen)
+//
+// D-pad up/down: select    left/right: page    A: open folder / run cart
+// B: parent folder         Enter on the USB serial port: drop to the REPL
+//
+// Everything is drawn inside a 4 px margin so nothing is lost in crop mode.
 
-static char cart_names[MAX_CARTS][64];
-static int cart_count = 0;
+#define PICK_MAX_ENTRIES 160
+#define PICK_NAME_LEN    64
+#define PICK_PATH_LEN    192
+
+typedef struct {
+    char name[PICK_NAME_LEN];
+    bool is_dir;
+} pick_entry_t;
+
+static pick_entry_t *pick_entries = NULL;   // allocated in PSRAM on first use
+static int pick_count = 0;
+static char pick_dir[PICK_PATH_LEN] = "/";
+static int pick_selected = 0;
+static char pick_result[PICK_PATH_LEN + PICK_NAME_LEN];
 
 static bool is_cart_file(const char *name) {
     size_t nlen = strlen(name);
-    if (nlen >= 7 && strcmp(name + nlen - 7, ".p8.png") == 0) return true;
-    if (nlen >= 3 && strcmp(name + nlen - 3, ".p8") == 0) return true;
+    if (nlen >= 7 && strcasecmp(name + nlen - 7, ".p8.png") == 0) return true;
+    if (nlen >= 3 && strcasecmp(name + nlen - 3, ".p8") == 0) return true;
     return false;
 }
 
-static void scan_dir(const char *dirpath, const char *prefix) {
+static int pick_cmp(const void *a, const void *b) {
+    const pick_entry_t *ea = (const pick_entry_t *)a;
+    const pick_entry_t *eb = (const pick_entry_t *)b;
+    if (strcmp(ea->name, "..") == 0) return -1;
+    if (strcmp(eb->name, "..") == 0) return 1;
+    if (ea->is_dir != eb->is_dir) return ea->is_dir ? -1 : 1;
+    return strcasecmp(ea->name, eb->name);
+}
+
+static void pick_scan(void) {
+    pick_count = 0;
+    if (!pick_entries) {
+        pick_entries = (pick_entry_t *)tlsf_malloc(cart_tlsf, sizeof(pick_entry_t) * PICK_MAX_ENTRIES);
+        if (!pick_entries) return;
+    }
+
+    if (strcmp(pick_dir, "/") != 0) {
+        strcpy(pick_entries[0].name, "..");
+        pick_entries[0].is_dir = true;
+        pick_count = 1;
+    }
+
     DIR dir;
     FILINFO fno;
-    if (f_opendir(&dir, dirpath) != FR_OK) return;
-    while (f_readdir(&dir, &fno) == FR_OK && fno.fname[0] != '\0') {
-        if (fno.fattrib & AM_DIR) continue;
-        if (is_cart_file(fno.fname) && cart_count < MAX_CARTS) {
-            snprintf(cart_names[cart_count], 64, "%s%s", prefix, fno.fname);
-            cart_count++;
+    audio_pause();
+    if (f_opendir(&dir, pick_dir) == FR_OK) {
+        while (pick_count < PICK_MAX_ENTRIES &&
+               f_readdir(&dir, &fno) == FR_OK && fno.fname[0] != '\0') {
+            if (fno.fname[0] == '.') continue;
+            if (fno.fattrib & (AM_HID | AM_SYS)) continue;
+            bool is_dir = (fno.fattrib & AM_DIR) != 0;
+            if (!is_dir && !is_cart_file(fno.fname)) continue;
+            if (strlen(fno.fname) >= PICK_NAME_LEN) continue;
+            strcpy(pick_entries[pick_count].name, fno.fname);
+            pick_entries[pick_count].is_dir = is_dir;
+            pick_count++;
         }
+        f_closedir(&dir);
     }
-    f_closedir(&dir);
+    audio_resume();
+
+    qsort(pick_entries, pick_count, sizeof(pick_entry_t), pick_cmp);
 }
 
-static void scan_carts(void) {
-    cart_count = 0;
-    scan_dir("/", "/");
-    scan_dir("/carts", "/carts/");
+// Go to parent folder; select the folder we came from
+static void pick_go_up(void) {
+    if (strcmp(pick_dir, "/") == 0) return;
+    char child[PICK_NAME_LEN];
+    char *slash = strrchr(pick_dir, '/');
+    snprintf(child, sizeof(child), "%s", slash + 1);
+    if (slash == pick_dir) slash[1] = '\0'; else *slash = '\0';
+    pick_scan();
+    pick_selected = 0;
+    for (int i = 0; i < pick_count; i++)
+        if (pick_entries[i].is_dir && strcmp(pick_entries[i].name, child) == 0)
+            pick_selected = i;
 }
 
-// Returns selected cart path, or NULL if user pressed ESC or no carts found
+static void pick_enter(const char *name) {
+    size_t len = strlen(pick_dir);
+    if (len + strlen(name) + 2 >= sizeof(pick_dir)) return;
+    if (pick_dir[len - 1] != '/') strcat(pick_dir, "/");
+    strcat(pick_dir, name);
+    pick_scan();
+    pick_selected = 0;
+}
+
+// Draw at most max_chars of str (4 px per char), starting at char offset
+static void pick_print_clip(const char *str, int offset, int max_chars, int x, int y, int c) {
+    char tmp[PICK_PATH_LEN];
+    int len = (int)strlen(str);
+    if (offset > len) offset = len;
+    int n = len - offset;
+    if (n > max_chars) n = max_chars;
+    if (n > (int)sizeof(tmp) - 1) n = sizeof(tmp) - 1;
+    memcpy(tmp, str + offset, n);
+    tmp[n] = '\0';
+    gfx_print_w(tmp, x, y, c, 4);
+}
+
+static void pick_draw_header(void) {
+    gfx_print_w("wili8jam", 5, 5, 7, 4);
+    char bat[16];
+    if (held_on_external_power())
+        snprintf(bat, sizeof(bat), "usb");
+    else
+        snprintf(bat, sizeof(bat), "%d%%", held_battery_level());
+    int lvl = held_battery_level();
+    int bc = held_on_external_power() ? 11 : (lvl <= 20 ? 8 : 6);
+    gfx_print_w(bat, 123 - (int)strlen(bat) * 4, 5, bc, 4);
+    gfx_rectfill(4, 12, 123, 12, 5);
+}
+
 const char *p8_cart_picker(void) {
-    scan_carts();
-
-    if (cart_count == 0) {
-        printf("No .p8 carts found on SD card\n");
-        return NULL;
+    static bool first = true;
+    if (first) {
+        first = false;
+        pick_scan();
     }
 
-    printf("Found %d cart(s)\n", cart_count);
-
-    int selected = 0;
+    input_flush();
     int scroll = 0;
-    const int visible = 18; // lines visible on 128px screen with 6px font + header
+    uint32_t frame = 0;
+    int last_selected = -1;
+    uint32_t marquee_start = 0;
+    const int list_y = 23;
+    const int row_h = 7;
+    const int visible = 13;       // rows 23..113
+    const int name_chars = 27;    // (123 - 14) / 4
 
     while (true) {
         input_update();
 
-        // Navigation
-        if (input_btnp(2, 0)) { // up
-            selected--;
-            if (selected < 0) selected = cart_count - 1;
-        }
-        if (input_btnp(3, 0)) { // down
-            selected++;
-            if (selected >= cart_count) selected = 0;
-        }
-        if (input_btnp(4, 0) || input_btnp(5, 0)) { // O or X = select
-            return cart_names[selected];
-        }
-        if (input_key(0x29)) { // ESC
+        // Enter on the USB serial port -> REPL
+        int ch = getchar_timeout_us(0);
+        if (ch == '\r' || ch == '\n') {
             return NULL;
         }
 
-        // Scroll to keep selected visible
-        if (selected < scroll) scroll = selected;
-        if (selected >= scroll + visible) scroll = selected - visible + 1;
+        if (pick_count > 0) {
+            if (input_btnp(2, 0)) pick_selected = (pick_selected + pick_count - 1) % pick_count;
+            if (input_btnp(3, 0)) pick_selected = (pick_selected + 1) % pick_count;
+            if (input_btnp(0, 0)) { pick_selected -= visible; if (pick_selected < 0) pick_selected = 0; }
+            if (input_btnp(1, 0)) { pick_selected += visible; if (pick_selected >= pick_count) pick_selected = pick_count - 1; }
 
-        // Draw picker UI
-        gfx_cls(1); // dark blue background
-
-        // Header
-        gfx_print("wili8jam carts", 16, 2, 7);
-        gfx_rectfill(0, 9, 127, 9, 6); // separator line
-
-        // Cart list
-        for (int i = 0; i < visible && scroll + i < cart_count; i++) {
-            int idx = scroll + i;
-            int y = 12 + i * 6;
-
-            // Extract just the filename from the path
-            const char *name = cart_names[idx];
-            const char *slash = strrchr(name, '/');
-            if (slash) name = slash + 1;
-
-            if (idx == selected) {
-                gfx_rectfill(0, y, 127, y + 5, 12); // blue highlight
-                gfx_print(">", 0, y, 7);
-                gfx_print(name, 6, y, 7);
-            } else {
-                gfx_print(name, 6, y, 6);
+            if (input_btnp(4, 0)) {  // A
+                pick_entry_t *e = &pick_entries[pick_selected];
+                if (strcmp(e->name, "..") == 0) {
+                    pick_go_up();
+                } else if (e->is_dir) {
+                    pick_enter(e->name);
+                } else {
+                    snprintf(pick_result, sizeof(pick_result), "%s%s%s", pick_dir,
+                             pick_dir[strlen(pick_dir) - 1] == '/' ? "" : "/", e->name);
+                    input_flush();
+                    return pick_result;
+                }
+                input_flush();
+                continue;
             }
         }
+        if (input_btnp(5, 0)) {  // B
+            pick_go_up();
+            input_flush();
+            continue;
+        }
 
-        // Footer
-        gfx_print("o/x:run esc:repl", 8, 122, 5);
+        if (pick_selected < scroll) scroll = pick_selected;
+        if (pick_selected >= scroll + visible) scroll = pick_selected - visible + 1;
+        if (pick_selected != last_selected) {
+            last_selected = pick_selected;
+            marquee_start = frame;
+        }
+
+        // --- draw ---
+        gfx_cls(1);
+        pick_draw_header();
+
+        // current folder (show the tail if too long)
+        int dlen = (int)strlen(pick_dir);
+        pick_print_clip(pick_dir, dlen > 29 ? dlen - 29 : 0, 29, 5, 15, 13);
+
+        if (pick_count == 0) {
+            gfx_print_w("no carts here", 5, list_y + 4, 6, 4);
+            gfx_print_w("put .p8 / .p8.png", 5, list_y + 14, 13, 4);
+            gfx_print_w("files on the sd card", 5, list_y + 21, 13, 4);
+        }
+
+        for (int i = 0; i < visible && scroll + i < pick_count; i++) {
+            int idx = scroll + i;
+            int y = list_y + i * row_h;
+            pick_entry_t *e = &pick_entries[idx];
+            char label[PICK_NAME_LEN + 2];
+            snprintf(label, sizeof(label), "%s%s", e->name, e->is_dir ? "/" : "");
+
+            int offset = 0;
+            if (idx == pick_selected) {
+                gfx_rectfill(4, y - 1, 123, y + 5, 12);
+                gfx_print_w(">", 5, y, 7, 4);
+                // marquee for long names: wait 1 s, scroll, wait 1 s, restart
+                int over = (int)strlen(label) - name_chars;
+                if (over > 0) {
+                    int t = (int)((frame - marquee_start) / 4) - 8;
+                    if (t > over + 8) marquee_start = frame;
+                    offset = t < 0 ? 0 : (t > over ? over : t);
+                }
+            }
+            int col = (idx == pick_selected) ? 7 : (e->is_dir ? 10 : 6);
+            pick_print_clip(label, offset, name_chars, 13, y, col);
+        }
+
+        // scrollbar
+        if (pick_count > visible) {
+            int bar_h = (visible * row_h * visible) / pick_count;
+            if (bar_h < 4) bar_h = 4;
+            int bar_y = list_y - 1 + ((visible * row_h - bar_h) * scroll) / (pick_count - visible);
+            gfx_rectfill(122, bar_y, 123, bar_y + bar_h, 13);
+        }
+
+        // footer
+        gfx_rectfill(4, 115, 123, 115, 5);
+        gfx_print_w(held_lcd_get_scale_mode() == HELD_SCALE_FIT ? "a:run b:back  sel+l:crop"
+                                                                 : "a:run b:back  sel+l:fit",
+                    5, 118, 13, 4);
 
         gfx_flip();
-        sleep_ms(33); // ~30fps
+        frame++;
+        sleep_ms(16);
     }
+}
+
+// Show an error message (e.g. a cart's runtime error) until A or B is pressed
+void p8_cart_error_screen(const char *title, const char *msg) {
+    input_flush();
+    while (true) {
+        input_update();
+        if (input_btnp(4, 0) || input_btnp(5, 0) || input_exit_requested()) break;
+        int ch = getchar_timeout_us(0);
+        if (ch == '\r' || ch == '\n') break;
+
+        gfx_cls(0);
+        gfx_print_w(title, 5, 5, 8, 4);
+        gfx_rectfill(4, 12, 123, 12, 8);
+        // wrap the message at 29 chars per line
+        int y = 16;
+        const char *p = msg;
+        while (*p && y < 108) {
+            char line[30];
+            int n = 0;
+            while (p[n] && p[n] != '\n' && n < 29) n++;
+            memcpy(line, p, n);
+            line[n] = '\0';
+            gfx_print_w(line, 5, y, 7, 4);
+            y += 7;
+            p += n;
+            if (*p == '\n') p++;
+        }
+        gfx_print_w("a/b: back", 5, 118, 13, 4);
+        gfx_flip();
+        sleep_ms(33);
+    }
+    input_flush();
 }
 
 // ============================================================

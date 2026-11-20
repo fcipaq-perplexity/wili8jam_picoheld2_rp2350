@@ -1,8 +1,9 @@
 # wili8jam
 
-A PICO-8-compatible fantasy console for the [Adafruit Fruit Jam](https://www.adafruit.com/product/6313) (RP2350B).
+A PICO-8-compatible fantasy console for the **Pico Held 2** handheld (RP2350B edition).
+Port of wili8jam (originally for the Adafruit Fruit Jam).
 
-Runs PICO-8 `.p8` and `.p8.png` cartridges from an SD card with DVI video output, I2S audio, and USB keyboard/mouse/gamepad input. Includes an interactive Lua REPL and on-device code editor.
+Runs PICO-8 `.p8` and `.p8.png` cartridges from an SD card on the Pico Held 2's 720x720 LCD with I2S audio and the built-in buttons. A Lua REPL is available over USB serial.
 
 ## Features
 
@@ -10,63 +11,96 @@ Runs PICO-8 `.p8` and `.p8.png` cartridges from an SD card with DVI video output
 - **100+ PICO-8 API functions** -- graphics, audio, input, math, strings, tables, memory, coroutines, cartdata
 - **8-channel audio** -- 4-channel SFX engine (8 waveforms, 7 effects) + music pattern sequencer + 4-channel basic synth
 - **PICO-8 syntax preprocessor** -- `!=`, `+=`, short-form `if`/`while`, `?print`, `//` comments, P8SCII glyphs, `0b` literals
-- **128x128 DVI display** -- 4-bit indexed framebuffer with PICO-8 16-color palette, 3x scaled to 384x384
-- **Interactive Lua 5.4 REPL** -- serial terminal over USB CDC and on-screen console
-- **On-device code editor** -- syntax highlighting, copy/paste, load/save `.p8` files
-- **Cart picker UI** -- browse and launch cartridges from the SD card
-- **USB input** -- keyboard, mouse, and gamepad via PIO-USB host (simultaneous with USB serial)
+- **128x128 screen on the 720x720 LCD** -- two scaling modes: *crop* (2x, outer 4 pixels on each side cut off) and *fit* (1.875x, whole screen)
+- **Cart picker** -- browse folders on the SD card and launch carts with the buttons
+- **Lua 5.4 REPL** -- over USB CDC serial (also used for debug output)
 - **8 MB PSRAM heap** -- Lua allocations backed by TLSF allocator on external PSRAM
 
 ## Hardware
 
 | | |
 |-|-|
-| **Board** | Adafruit Fruit Jam (RP2350B) |
+| **Board** | Pico Held 2, RP2350B edition (board definition: `boards/picoheld_2.h`) |
 | **CPU** | Dual ARM Cortex-M33 @ 252 MHz |
-| **RAM** | 520 KB SRAM + 8 MB PSRAM |
-| **Storage** | microSD (FAT32) |
-| **Display** | DVI via HSTX (640x480@60Hz) |
-| **Audio** | I2S to TLV320DAC3100 DAC |
-| **Input** | USB-A host port (keyboard, mouse, gamepad) |
+| **RAM** | 520 KB SRAM + 8 MB PSRAM (APS6404L on GPIO 0, 84 MHz) |
+| **Flash** | 16 MB |
+| **Storage** | microSD (FAT32), SPI0 |
+| **Display** | 720x720 RGB DPI panel via PIO/DMA (Pico Engine driver), 240x240 8-bit CLUT framebuffer, 3x scanout |
+| **Audio** | I2S DAC, 22.05 kHz |
+| **Input** | D-pad, analog stick, A/B/X/Y, L/R, START/SELECT |
 | **Serial** | USB-C (CDC terminal) |
+
+The hardware drivers in `picoengine/` are the Pico Engine library (LCD, buttons, power, backlight). They are compiled directly from that tree by the top-level `CMakeLists.txt`; `src/held_hw.cpp` is the C glue between them and the emulator.
+
+## Controls
+
+| Button | PICO-8 / function |
+|-|-|
+| D-pad / analog stick | ⬅️ ➡️ ⬆️ ⬇️ |
+| A | 🅾️ (O) |
+| B | ❎ (X) |
+| START | pause/menu button (`btn(6)`) |
+| SELECT + START | exit the cart, back to the cart picker (also leaves the REPL) |
+| SELECT + L | toggle screen scaling: crop (2x) / fit (1.875x) |
+| SELECT + UP / DOWN | volume |
+| hold R (2 s) | power off |
+| SELECT while powering on | USB bootloader (hard-wired to BOOTSEL) |
+
+While SELECT is held the cart sees no buttons.
 
 ## Building
 
 ### Prerequisites
 
-- [Pico SDK 2.2.0](https://github.com/raspberrypi/pico-sdk) (required for Fruit Jam board definition)
-- ARM GCC toolchain (14.2.1 or later)
-- CMake 3.30+
-- Make (or another CMake-supported generator)
+- [Pico SDK 2.2.0](https://github.com/raspberrypi/pico-sdk)
+- ARM GCC toolchain (14.2.1 recommended)
+- CMake 3.13+
 
 ### Build
 
 ```bash
-cd build
+mkdir -p build && cd build
 cmake .. -G "Unix Makefiles"
 make -j8
 ```
 
-Output: `build/wili8jam.uf2` (~950 KB)
+Options:
+
+- `-DPICOHELD2_HW_VARIANT=0` -- Pico Held 2 v1.5, SunmaxIC panel (default)
+- `-DPICOHELD2_HW_VARIANT=1` -- Pico Held 2 v1.4, Buydisplay panel
+
+Outputs:
+
+- `build/wili8jam.uf2` -- the console
+- `build/picoheld2_hwtest.uf2` -- hardware bring-up test: colour bars, crop/fit frame markers, orientation marker, live button display, A/B play test sounds
+
+Compile-time knobs (add with `target_compile_definitions`): `HELD_LCD_NUM_FB` (2 = double buffering, 1 = single buffer, less RAM, may tear), `HELD_USE_ANALOG_STICK`, `HELD_STICK_INVERT_X/Y`, `HELD_STICK_THRESHOLD`, `PSRAM_MAX_FREQ_HZ` (default 84 MHz; 63000000 if PSRAM is flaky).
 
 ### Flash
 
-Hold BOOTSEL on the Fruit Jam while connecting USB-C, then copy `wili8jam.uf2` to the mounted drive.
+Hold SELECT while switching the Pico Held 2 on, then copy the `.uf2` to the mounted drive.
 
 ### Tests
 
 The PICO-8 preprocessor has a host-side test suite that runs natively:
 
 ```bash
-gcc -o test_preprocess src/test_p8_preprocess.c src/p8_preprocess.c tlsf/tlsf.c -Isrc -Itlsf -lm -DTEST_HOST
+gcc -o test_preprocess src/test_p8_preprocess.c src/p8_preprocess.c tlsf/tlsf.c -Isrc -I. -lm -DTEST_HOST
 ./test_preprocess
 ```
 
 ## Usage
 
+### Running Cartridges
+
+Put `.p8` or `.p8.png` files anywhere on the SD card (folders are supported). After boot the cart picker shows the SD card: UP/DOWN select, LEFT/RIGHT page, A runs a cart or opens a folder, B goes up one folder.
+
+- **Auto-run:** a file named `main.p8` (or `main.p8.png`) in the root runs once at boot
+- **Exit a cart:** SELECT + START. Runtime errors are shown on screen.
+
 ### Serial REPL
 
-Connect to the USB-C serial port (115200 baud). You get a Lua 5.4 REPL with PICO-8 API functions available as globals.
+Connect to the USB-C serial port (115200 baud) and press Enter while the cart picker is shown. You get a Lua 5.4 REPL with PICO-8 API functions available as globals; the console is mirrored on the LCD. SELECT + START on the device returns to the cart picker.
 
 ```
 > print("hello")
@@ -75,38 +109,18 @@ hello
 > flip()
 ```
 
-Built-in commands: `ls`, `cd`, `load`, `run`, `edit`, `save`, `cls`, `help`, `info`, `reboot`
-
-### Running Cartridges
-
-Place `.p8` or `.p8.png` files on the SD card root.
-
-- **Auto-run:** Name a file `main.p8` to run it on boot
-- **REPL:** Type `load game` then `run`, or `load("game.p8")`
-- **Cart picker:** Boot without `main.p8` on the SD to get a file browser
-
-Press **ESC** to exit a running cartridge back to the REPL. Type `resume` to re-enter without resetting.
-
-### Code Editor
-
-Press **ESC** from the REPL to enter the editor. Press **ESC** again to return to the REPL. Editor state persists between switches.
-
-- Arrow keys, Home/End, PgUp/PgDn for navigation
-- Shift+arrows for selection, Ctrl+C/X/V for clipboard, Ctrl+A to select all
-- Syntax highlighting for Lua keywords, strings, numbers, comments
-- Save from the REPL with `save filename` (`.p8` extension added automatically)
-- If a cart is loaded, `edit` opens its code automatically
+Built-in commands: `ls`, `cd`, `load`, `run`, `resume`, `cls`, `help`, `info`, `reboot`, `input.debug()`
 
 ## Source Files
 
 | File | Purpose |
 |------|---------|
-| `src/main.cpp` | Entry point, init sequence, REPL loop, Lua library registration |
-| `src/dvi.c/h` | HSTX DVI driver: 640x480@60Hz timing, DMA command list, TMDS encoding |
+| `src/main.cpp` | Entry point, init sequence, picker/REPL main loop, Lua library registration |
+| `src/held_hw.cpp/h` | Pico Held 2 glue: power latch, buttons, battery, LCD scaling (128x128 4bpp -> 240x240 CLUT) |
 | `src/gfx.c/h` | 128x128 4-bit indexed framebuffer, drawing primitives, font rendering |
-| `src/audio.c/h` | I2S codec init (I2C), PIO program, DMA ISR, 4-channel basic synth |
-| `src/audio_i2s.pio` | PIO I2S transmitter program |
-| `src/input.c/h` | HID keyboard state, PICO-8 button mapping, gamepad parsing, mouse |
+| `src/audio.c/h` | I2S PIO + DMA output, software volume, 4-channel basic synth |
+| `src/audio_i2s.pio` | PIO I2S transmitter program (LRCLK on the lower pin) |
+| `src/input.c/h` | Button mapping, btnp auto-repeat, system button combos |
 | `src/sdcard.c/h` | SD card SPI driver |
 | `src/psram.h` | PSRAM initialization via QMI hardware registers |
 | `src/p8_api.c/h` | Full PICO-8 API: 100+ Lua globals |
@@ -115,8 +129,9 @@ Press **ESC** from the REPL to enter the editor. Press **ESC** again to return t
 | `src/p8_preprocess.c/h` | PICO-8 syntax preprocessor |
 | `src/p8_sfx.c/h` | SFX engine + music pattern sequencer |
 | `src/p8_console.c/h` | On-screen text console |
-| `src/p8_editor.c/h` | On-device code editor |
-| `src/test_p8_preprocess.c` | 54 host-side preprocessor tests |
+| `src/hwtest.c` | Hardware bring-up test firmware |
+| `src/test_p8_preprocess.c` | Host-side preprocessor tests |
+| `boards/picoheld_2.h` | Reusable Pico SDK board definition |
 
 ### Vendored Libraries
 
@@ -125,8 +140,7 @@ Press **ESC** from the REPL to enter the editor. Press **ESC** again to return t
 | `lua-5.4.7/src/` | [Lua 5.4.7](https://www.lua.org/) (LUA_32BITS=1, patched luaconf.h) |
 | `tlsf/` | [TLSF v3.1](http://www.gii.upv.es/tlsf/) allocator for PSRAM |
 | `fatfs/` | [FatFS R0.15](http://elm-chan.org/fsw/ff/) + custom diskio with PSRAM bounce buffer |
-| `Pico-PIO-USB/` | [Pico-PIO-USB](https://github.com/sekigon-gonnern/Pico-PIO-USB) |
-| `usb-host/` | TinyUSB host wrappers (HID keyboard/mouse/gamepad, CDC, MSC) |
+| `picoengine/` | Pico Engine -- Pico Held 2 hardware library (LCD, controls, power) |
 
 ## Acknowledgments
 

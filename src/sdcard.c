@@ -13,12 +13,15 @@
 #include "hardware/gpio.h"
 
 /* Fruit Jam SD card pins */
+/* Pico Held 2 pins (see boards/picoheld_2.h). GPIO 32..35 = SPI0 RX/CSn/SCK/TX.
+ * SCK (34) is shared with the LCD's bit-banged config SPI, so the LCD must be
+ * initialised before the SD card (sd_init() re-muxes GPIO 34 to SPI). */
 #define SD_SPI       spi0
-#define SD_SCK_PIN   34
-#define SD_MOSI_PIN  35
-#define SD_MISO_PIN  36
-#define SD_CS_PIN    39
-#define SD_CD_PIN    33
+#define SD_SCK_PIN   PICOHELD2_SD_SCK_PIN   /* 34 */
+#define SD_MOSI_PIN  PICOHELD2_SD_MOSI_PIN  /* 35 */
+#define SD_MISO_PIN  PICOHELD2_SD_MISO_PIN  /* 32 */
+#define SD_CS_PIN    PICOHELD2_SD_CS_PIN    /* 33 */
+#define SD_CD_PIN    PICOHELD2_SD_DET_PIN   /* 31: low = card inserted, NO pulls */
 
 /* SPI speeds */
 #define SD_SPI_INIT_HZ   400000     /* 400 kHz for init */
@@ -127,16 +130,22 @@ int sd_init(void) {
     gpio_set_dir(SD_CS_PIN, GPIO_OUT);
     cs_deselect();
 
-    /* Init card detect pin with pull-up */
+    /* Card detect: plain input, no pulls (the line also gates the SD supply).
+     * High = no card inserted. */
     gpio_init(SD_CD_PIN);
     gpio_set_dir(SD_CD_PIN, GPIO_IN);
-    gpio_pull_up(SD_CD_PIN);
+    gpio_disable_pulls(SD_CD_PIN);
+    if (gpio_get(SD_CD_PIN)) {
+        return SD_NO_CARD;
+    }
+    sleep_ms(5);  /* let the card supply settle */
 
     /* Init SPI at slow speed for card init */
     spi_init(SD_SPI, SD_SPI_INIT_HZ);
     gpio_set_function(SD_SCK_PIN, GPIO_FUNC_SPI);
     gpio_set_function(SD_MOSI_PIN, GPIO_FUNC_SPI);
     gpio_set_function(SD_MISO_PIN, GPIO_FUNC_SPI);
+    gpio_pull_up(SD_MISO_PIN);  /* SD spec: DO idles high */
 
     /* Send 80+ clock pulses with CS high (card power-up sequence) */
     cs_deselect();

@@ -12,12 +12,9 @@ extern "C" {
 #define GFX_WIDTH  128
 #define GFX_HEIGHT 128
 
-// Initialize graphics subsystem (clears framebuffer, sets up palette).
-// Call before dvi_init().
+// Initialize graphics subsystem (clears framebuffer).
+// The LCD itself is started with held_lcd_init().
 void gfx_init(void);
-
-// Returns pointer to the RGB565 DVI framebuffer (for passing to dvi_init).
-uint16_t *gfx_get_dvi_buffer(void);
 
 // Drawing API (all coordinates clipped to 0..127, colors masked to 0..15)
 void gfx_cls(int color);

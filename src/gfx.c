@@ -9,6 +9,7 @@
 #include "lua.h"
 #include "lauxlib.h"
 #include "p8_sfx.h"
+#include "held_hw.h"
 
 // --- Framebuffers ---
 
@@ -18,16 +19,13 @@
 static uint8_t fb4_default[FB4_SIZE];
 static uint8_t *fb4 = fb4_default;
 
-// RGB565 DVI framebuffer: 128*128*2 = 32768 bytes
-static uint16_t fb_dvi[GFX_WIDTH * GFX_HEIGHT];
-
 // Display palette: if set, maps framebuffer color → display color before palette lookup
 static const uint8_t *gfx_disp_pal = NULL;
 
 // Current default draw color
 static int draw_color = 7; // white
 
-// --- PICO-8 palette (RGB565, big-endian for DVI with BSWAP) ---
+// --- PICO-8 palette (RGB565, R in the top bits; loaded into the LCD CLUT) ---
 // Standard RGB888 -> RGB565: R>>3 << 11 | G>>2 << 5 | B>>3
 
 static const uint16_t palette[16] = {
@@ -435,11 +433,6 @@ static inline int in_bounds(int x, int y) {
 void gfx_init(void) {
     draw_color = 7;
     memset(fb4, 0, FB4_SIZE);
-    memset(fb_dvi, 0, sizeof(fb_dvi));
-}
-
-uint16_t *gfx_get_dvi_buffer(void) {
-    return fb_dvi;
 }
 
 void gfx_cls(int color) {
@@ -818,22 +811,9 @@ int gfx_text_width(const char *str, int char_w) {
 }
 
 void gfx_flip(void) {
-    // Convert 4-bit indexed framebuffer to RGB565 via palette LUT
-    // PICO-8 nibble order: low nibble = left (even x), high nibble = right (odd x)
-    // Apply display palette if set (screen-level color remapping for fade/flash effects)
-    if (gfx_disp_pal) {
-        for (int i = 0; i < GFX_WIDTH * GFX_HEIGHT / 2; i++) {
-            uint8_t pair = fb4[i];
-            fb_dvi[i * 2    ] = palette[gfx_disp_pal[pair & 0xF]];
-            fb_dvi[i * 2 + 1] = palette[gfx_disp_pal[(pair >> 4) & 0xF]];
-        }
-    } else {
-        for (int i = 0; i < GFX_WIDTH * GFX_HEIGHT / 2; i++) {
-            uint8_t pair = fb4[i];
-            fb_dvi[i * 2    ] = palette[pair & 0xF];
-            fb_dvi[i * 2 + 1] = palette[(pair >> 4) & 0xF];
-        }
-    }
+    // Scale the 4-bit indexed framebuffer onto the LCD (8-bit CLUT, 240x240).
+    // The screen palette (pal(c0,c1,1)) is applied through the LCD's hardware CLUT.
+    held_lcd_present(fb4, gfx_disp_pal, palette);
 }
 
 void gfx_set_fb(uint8_t *buf) {

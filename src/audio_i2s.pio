@@ -1,47 +1,42 @@
-; audio_i2s.pio — I2S transmitter for TLV320DAC3100 on Fruit Jam
-; 16-bit stereo, MSB first
+; I2S transmitter, 16-bit stereo, MSB first, standard I2S (data delayed 1 BCLK after LRCLK).
 ;
-; OUT pin 0:       DIN  (GPIO 24)
-; Side-set pin 0:  BCLK (GPIO 26)
-; Side-set pin 1:  WS   (GPIO 27)
-;
-; Autopull threshold = 32, shift left
-; PIO clock = sample_rate * 64 (32 BCLK cycles per frame, 2 PIO cycles per BCLK)
+; Pico Held 2 pin order: side-set bit 0 = LRCLK (GPIO 37), bit 1 = BCLK (GPIO 38).
+; (The Fruit Jam original had BCLK on the lower pin; the bits are swapped here.)
+; OUT pin = DATA (GPIO 39). One 32-bit FIFO word = L (upper 16) | R (lower 16).
+; PIO clock = 2x BCLK (each instruction is half a bit period).
 
 .program audio_i2s
 .side_set 2
 
-;                          /--- WS (LRCK)
-;                          |/-- BCLK
+;                          side-set = 0bBL  (B = BCLK, L = LRCLK)
 .wrap_target
-    set x, 14       side 0b01  ; preload 15-1 counter; BCLK high, WS low
+    set x, 14       side 0b10  ; preload 15-1 counter; BCLK high, LR low
 left_data:
     out pins, 1     side 0b00  ; shift out data bit; BCLK low (data changes)
-    jmp x-- left_data side 0b01 ; BCLK high (DAC samples); loop 15 times
-    out pins, 1     side 0b10  ; 16th bit out; BCLK low, WS goes high (right channel)
-    set x, 14       side 0b11  ; preload counter; BCLK high, WS high
+    jmp x-- left_data side 0b10 ; BCLK high (DAC samples); loop 15 times
+    out pins, 1     side 0b01  ; 16th bit out; BCLK low, LR goes high (right channel)
+    set x, 14       side 0b11  ; preload counter; BCLK high, LR high
 right_data:
-    out pins, 1     side 0b10  ; shift out data bit; BCLK low
+    out pins, 1     side 0b01  ; shift out data bit; BCLK low
     jmp x-- right_data side 0b11 ; BCLK high; loop 15 times
-    out pins, 1     side 0b00  ; 16th bit out; BCLK low, WS goes low (left channel)
+    out pins, 1     side 0b00  ; 16th bit out; BCLK low, LR goes low (left channel)
 .wrap
 
 
 % c-sdk {
+// lrclk_pin: LRCLK, BCLK must be lrclk_pin + 1.
+// The caller must have set the PIO's GPIO base (pio_set_gpio_base) for pins >= 32.
 static inline void audio_i2s_program_init(PIO pio, uint sm, uint offset,
-                                           uint din_pin, uint bclk_pin) {
-    // DIN is the OUT pin
+                                           uint din_pin, uint lrclk_pin) {
     pio_gpio_init(pio, din_pin);
+    pio_gpio_init(pio, lrclk_pin);      // LRCLK
+    pio_gpio_init(pio, lrclk_pin + 1);  // BCLK
     pio_sm_set_consecutive_pindirs(pio, sm, din_pin, 1, true);
-
-    // BCLK and WS are side-set pins (2 consecutive pins starting at bclk_pin)
-    pio_gpio_init(pio, bclk_pin);      // BCLK
-    pio_gpio_init(pio, bclk_pin + 1);  // WS
-    pio_sm_set_consecutive_pindirs(pio, sm, bclk_pin, 2, true);
+    pio_sm_set_consecutive_pindirs(pio, sm, lrclk_pin, 2, true);
 
     pio_sm_config c = audio_i2s_program_get_default_config(offset);
     sm_config_set_out_pins(&c, din_pin, 1);
-    sm_config_set_sideset_pins(&c, bclk_pin);
+    sm_config_set_sideset_pins(&c, lrclk_pin);
 
     // Autopull at 32 bits, shift left (MSB first)
     sm_config_set_out_shift(&c, false, true, 32);
