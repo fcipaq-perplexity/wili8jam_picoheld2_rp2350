@@ -262,6 +262,20 @@ int main(void) {
          "v+=a and 1 or 2 break",
          "v = v + (a and 1 or 2) break\n");
 
+    /* Minified code: number directly followed by an identifier */
+    test("minified-compound-number-ident",
+         "f.hp+=1f.cooldown=300",
+         "f.hp = f.hp + (1) f.cooldown=300\n");
+    test("minified-assign-number-call",
+         "conselect=1sfx(14,1)",
+         "conselect=1 sfx(14,1)\n");
+    test("hex-number-stays",
+         "x=0x1f.8 y=0xff",
+         "x=0x1f.8 y=0xff\n");
+    test("ident-with-digits-stays",
+         "a1b=x2y",
+         "a1b=x2y\n");
+
     /* wander.p8 line 34: short-form if with compound + new assignment */
     test("wander-line34",
          "if (btn(\xe2\xac\x85\xef\xb8\x8f)) dx-= ac d=-1",

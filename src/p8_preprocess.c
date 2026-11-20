@@ -131,6 +131,34 @@ static bool next_line(const char *src, size_t src_len, size_t *pos,
 
 /* --- Identifier helpers --- */
 
+/* P8SCII 0x80..0xFF -> Unicode code point (as used in .p8 text files) */
+static const uint32_t p8scii_to_unicode[128] = {
+    0x02588, 0x02592, 0x1F431, 0x02B07, 0x02591, 0x0273D, 0x025CF, 0x02665,  /* 0x80 */
+    0x02609, 0x0C6C3, 0x02302, 0x02B05, 0x1F610, 0x0266A, 0x1F17E, 0x025C6,  /* 0x88 */
+    0x02026, 0x027A1, 0x02605, 0x029D7, 0x02B06, 0x002C7, 0x02227, 0x0274E,  /* 0x90 */
+    0x025A4, 0x025A5, 0x03042, 0x03044, 0x03046, 0x03048, 0x0304A, 0x0304B,  /* 0x98 */
+    0x0304D, 0x0304F, 0x03051, 0x03053, 0x03055, 0x03057, 0x03059, 0x0305B,  /* 0xA0 */
+    0x0305D, 0x0305F, 0x03061, 0x03064, 0x03066, 0x03068, 0x0306A, 0x0306B,  /* 0xA8 */
+    0x0306C, 0x0306D, 0x0306E, 0x0306F, 0x03072, 0x03075, 0x03078, 0x0307B,  /* 0xB0 */
+    0x0307E, 0x0307F, 0x03080, 0x03081, 0x03082, 0x03084, 0x03086, 0x03088,  /* 0xB8 */
+    0x03089, 0x0308A, 0x0308B, 0x0308C, 0x0308D, 0x0308F, 0x03092, 0x03093,  /* 0xC0 */
+    0x03063, 0x03083, 0x03085, 0x03087, 0x030A2, 0x030A4, 0x030A6, 0x030A8,  /* 0xC8 */
+    0x030AA, 0x030AB, 0x030AD, 0x030AF, 0x030B1, 0x030B3, 0x030B5, 0x030B7,  /* 0xD0 */
+    0x030B9, 0x030BB, 0x030BD, 0x030BF, 0x030C1, 0x030C4, 0x030C6, 0x030C8,  /* 0xD8 */
+    0x030CA, 0x030CB, 0x030CC, 0x030CD, 0x030CE, 0x030CF, 0x030D2, 0x030D5,  /* 0xE0 */
+    0x030D8, 0x030DB, 0x030DE, 0x030DF, 0x030E0, 0x030E1, 0x030E2, 0x030E4,  /* 0xE8 */
+    0x030E6, 0x030E8, 0x030E9, 0x030EA, 0x030EB, 0x030EC, 0x030ED, 0x030EF,  /* 0xF0 */
+    0x030F2, 0x030F3, 0x030C3, 0x030E3, 0x030E5, 0x030E7, 0x025DC, 0x025DD,  /* 0xF8 */
+};
+
+/* Source encoding: false = UTF-8 (.p8 text files), true = raw P8SCII
+ * (code decompressed from .p8.png carts) */
+static bool src_p8scii = false;
+
+void p8_preprocess_set_p8scii(bool enable) {
+    src_p8scii = enable;
+}
+
 static bool is_ident_char(char c) {
     return isalnum((unsigned char)c) || c == '_';
 }
@@ -721,11 +749,27 @@ static size_t find_rhs_end(const char *line, size_t start, size_t len) {
                 gap = false;
                 continue;
             }
-            /* operand directly after a complete operand -> new statement */
-            if (prev_operand && gap) break;
-            bool number = (c >= '0' && c <= '9');
-            while (i < len && (is_ident_char(line[i]) ||
-                   (number && line[i] == '.' && !(i + 1 < len && line[i+1] == '.')))) i++;
+            /* operand directly after a complete operand -> new statement
+               ("1 return", "x y=2", minified "1f.x=3", "t[i]foo()") */
+            if (prev_operand) break;
+            if (c >= '0' && c <= '9') {
+                /* PICO-8 number: decimal, 0x hex or 0b binary, optional
+                   fraction. A letter right after it starts a new token. */
+                bool hex = (c == '0' && i + 1 < len && (line[i+1] == 'x' || line[i+1] == 'X'));
+                bool bin = (c == '0' && i + 1 < len && (line[i+1] == 'b' || line[i+1] == 'B'));
+                if (hex || bin) i += 2;
+                while (i < len) {
+                    char d = line[i];
+                    bool digit = hex ? isxdigit((unsigned char)d)
+                               : bin ? (d == '0' || d == '1')
+                                     : (d >= '0' && d <= '9');
+                    if (digit) { i++; continue; }
+                    if (d == '.' && !(i + 1 < len && line[i+1] == '.')) { i++; continue; }
+                    break;
+                }
+            } else {
+                while (i < len && is_ident_char(line[i])) i++;
+            }
             prev_operand = true;
             gap = false;
             continue;
@@ -998,6 +1042,17 @@ static bool transform_chars(buf_t *out, const char *line, size_t len,
             continue;
         }
 
+        /* Raw P8SCII source (.p8.png): glyph byte → _PG_XXXX identifier,
+           same name as the UTF-8 form below produces */
+        if (src_p8scii && (unsigned char)c >= 0x80) {
+            char idbuf[16];
+            snprintf(idbuf, sizeof(idbuf), "_PG_%X",
+                     (unsigned)p8scii_to_unicode[(unsigned char)c - 0x80]);
+            buf_puts(out, idbuf);
+            i++;
+            continue;
+        }
+
         /* P8SCII: multi-byte UTF-8 characters → _PG_XXXX identifiers */
         if ((unsigned char)c >= 0xC0) {
             uint32_t cp = 0;
@@ -1037,6 +1092,29 @@ static bool transform_chars(buf_t *out, const char *line, size_t len,
         /* Stray UTF-8 continuation bytes — skip */
         if ((unsigned char)c >= 0x80) {
             i++;
+            continue;
+        }
+
+        /* Number literal directly followed by an identifier (minified code:
+           "x=1sfx(3)", "a+=2b=5"). PICO-8 splits these, Lua's lexer reports
+           "malformed number" -> emit the number and a separating space.
+           (0b binary literals are handled below.) */
+        if (c >= '0' && c <= '9' &&
+            !(i > 0 && (is_ident_char(line[i-1]) || line[i-1] == '.')) &&
+            !(c == '0' && i + 1 < len && (line[i+1] == 'b' || line[i+1] == 'B'))) {
+            size_t j = i;
+            bool hex = (c == '0' && j + 1 < len && (line[j+1] == 'x' || line[j+1] == 'X'));
+            if (hex) j += 2;
+            while (j < len) {
+                char d = line[j];
+                bool digit = hex ? isxdigit((unsigned char)d) : (d >= '0' && d <= '9');
+                if (digit) { j++; continue; }
+                if (d == '.' && !(j + 1 < len && line[j+1] == '.')) { j++; continue; }
+                break;
+            }
+            buf_append(out, line + i, j - i);
+            if (j < len && is_ident_char(line[j])) buf_putc(out, ' ');
+            i = j;
             continue;
         }
 

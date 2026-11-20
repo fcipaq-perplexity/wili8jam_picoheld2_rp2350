@@ -654,9 +654,11 @@ int p8_cart_run(lua_State *L, const char *path) {
         return -1;
     }
 
-    // Preprocess PICO-8 syntax
+    // Preprocess PICO-8 syntax (code from .p8.png is raw P8SCII, .p8 is UTF-8)
     size_t pp_len;
+    p8_preprocess_set_p8scii(is_p8png(path));
     char *pp_code = p8_preprocess(lua_code, lua_len, &pp_len);
+    p8_preprocess_set_p8scii(false);
 
     const char *code;
     size_t code_len;

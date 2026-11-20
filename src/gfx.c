@@ -554,6 +554,19 @@ void gfx_circfill(int cx, int cy, int r, int c) {
 // Decode a UTF-8 sequence starting at *str, return Unicode code point.
 // Advances *str past the character (including variation selector U+FE0F).
 // Returns 0 on error.
+// true if str starts with a complete, valid UTF-8 multi-byte sequence
+static bool utf8_valid_seq(const char *str) {
+    const unsigned char *s = (const unsigned char *)str;
+    int nbytes;
+    if ((s[0] & 0xE0) == 0xC0)      nbytes = 2;
+    else if ((s[0] & 0xF0) == 0xE0) nbytes = 3;
+    else if ((s[0] & 0xF8) == 0xF0) nbytes = 4;
+    else return false;
+    for (int j = 1; j < nbytes; j++)
+        if ((s[j] & 0xC0) != 0x80) return false;
+    return true;
+}
+
 static uint32_t decode_utf8(const char **str) {
     const unsigned char *s = (const unsigned char *)*str;
     uint32_t cp = 0;
@@ -662,8 +675,10 @@ void gfx_print_w(const char *str, int x, int y, int c, int char_w) {
             continue;
         }
 
-        // UTF-8 multi-byte → decode and look up P8SCII glyph
-        if (ch >= 0xC0) {
+        // UTF-8 multi-byte → decode and look up P8SCII glyph.
+        // Not valid UTF-8 (raw P8SCII from a .p8.png cart, e.g. katakana
+        // 0xC0+) -> falls through to the raw P8SCII path below.
+        if (ch >= 0xC0 && utf8_valid_seq(str)) {
             uint32_t cp = decode_utf8(&str);
             int p8 = (cp > 0) ? unicode_to_p8scii(cp) : -1;
             if (p8 >= 128) {
@@ -794,7 +809,7 @@ int gfx_text_width(const char *str, int char_w) {
         }
         // P8SCII special display chars (16-31)
         if (ch >= 16 && ch <= 31) { str++; w += char_w; continue; }
-        if (ch >= 0xC0) {
+        if (ch >= 0xC0 && utf8_valid_seq(str)) {
             uint32_t cp = decode_utf8(&str);
             int p8 = (cp > 0) ? unicode_to_p8scii(cp) : -1;
             if (p8 >= 128)

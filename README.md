@@ -93,6 +93,14 @@ gcc -o test_preprocess src/test_p8_preprocess.c src/p8_preprocess.c tlsf/tlsf.c 
 ./test_preprocess
 ```
 
+Check a `.p8.png` cart on the host (same PNG/PXA/preprocessor code as the firmware):
+
+```bash
+gcc -o test_p8png test_p8png.c src/p8_png.c src/p8_preprocess.c tlsf/tlsf.c \
+    $(ls lua-5.4.7/src/*.c | grep -v '/lua.c\|/luac.c') -Isrc -I. -Ilua-5.4.7/src -DLUA_32BITS=1 -lm
+./test_p8png mycart.p8.png
+```
+
 ## Usage
 
 ### Running Cartridges

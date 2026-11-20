@@ -492,17 +492,32 @@ static char *decompress_pxa(const uint8_t *src, size_t src_len,
 
             out[oi++] = (char)ch;
         } else {
-            // Copy reference
-            int offset_bits = br_bit(&br);
-            int length_bits = br_bit(&br);
-            int offset = (int)br_bits(&br, 3 + offset_bits);
-            int length = (int)br_bits(&br, 4 + length_bits);
+            // Back reference: offset width 5 / 10 / 15 bits (prefix 11 / 10 / 0)
+            int nbits = br_bit(&br) ? (br_bit(&br) ? 5 : 10) : 15;
+            int offset = (int)br_bits(&br, nbits) + 1;
 
-            if (offset == 0 || offset > (int)oi) break; // invalid
+            if (nbits == 10 && offset == 1) {
+                // Special case: raw (uncompressed) bytes until a 0 byte
+                for (;;) {
+                    uint8_t ch = (uint8_t)br_bits(&br, 8);
+                    if (ch == 0 || oi >= decomp_len) break;
+                    out[oi++] = (char)ch;
+                }
+                continue;
+            }
 
-            for (int ci = 0; ci < length && oi < decomp_len; ci++)
-                out[oi + ci] = out[oi - offset + ci];
-            oi += length;
+            // Length: 3 + sum of 3-bit chunks, continued while a chunk is 7
+            int length = 3;
+            int n;
+            do {
+                n = (int)br_bits(&br, 3);
+                length += n;
+            } while (n == 7 && br.byte_pos < br.len);
+
+            if (offset > (int)oi) break; // invalid
+
+            for (int ci = 0; ci < length && oi < decomp_len; ci++, oi++)
+                out[oi] = out[oi - offset];
         }
     }
 
