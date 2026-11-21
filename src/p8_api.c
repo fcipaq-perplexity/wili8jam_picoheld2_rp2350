@@ -134,6 +134,15 @@ static inline void p8_pixel(int x, int y, int c) {
     gfx_pset(x, y, c);
 }
 
+// Same without fill pattern (sprites ignore fillp in PICO-8)
+static inline void p8_pixel_nofill(int x, int y, int c) {
+    x -= p8_camera_x;
+    y -= p8_camera_y;
+    if (x < p8_clip_x || x >= p8_clip_x + p8_clip_w) return;
+    if (y < p8_clip_y || y >= p8_clip_y + p8_clip_h) return;
+    gfx_pset(x, y, p8_draw_pal[c & 0xF]);
+}
+
 // Horizontal line with clipping/camera/palette
 static void p8_hline(int x0, int x1, int y, int c) {
     y -= p8_camera_y;
@@ -466,6 +475,46 @@ void p8_register_print(lua_State *L) {
 
 // --- Sprite drawing ---
 
+// Copy a pw x ph rectangle of the sprite sheet (sx, sy) to the screen at
+// (dx, dy) (before camera), with transparency (palt) and draw palette.
+// Clipped once against the clip rect and the screen; fill patterns do not
+// apply to sprites (as in PICO-8).
+static void p8_blit_sheet(int sx, int sy, int pw, int ph, int dx, int dy,
+                          int flip_x, int flip_y) {
+    int x0 = dx - p8_camera_x, y0 = dy - p8_camera_y;
+    int cx0 = p8_clip_x < 0 ? 0 : p8_clip_x;
+    int cy0 = p8_clip_y < 0 ? 0 : p8_clip_y;
+    int cx1 = p8_clip_x + p8_clip_w; if (cx1 > 128) cx1 = 128;
+    int cy1 = p8_clip_y + p8_clip_h; if (cy1 > 128) cy1 = 128;
+    int px_start = cx0 - x0 > 0 ? cx0 - x0 : 0;
+    int px_end   = cx1 - x0 < pw ? cx1 - x0 : pw;
+    int py_start = cy0 - y0 > 0 ? cy0 - y0 : 0;
+    int py_end   = cy1 - y0 < ph ? cy1 - y0 : ph;
+    if (px_start >= px_end || py_start >= py_end) return;
+
+    uint8_t *fb = gfx_get_fb();
+    const uint16_t palt = p8_palt_mask;
+
+    for (int py = py_start; py < py_end; py++) {
+        int src_y = sy + (flip_y ? (ph - 1 - py) : py);
+        if (src_y < 0 || src_y >= 128) continue;
+        const uint8_t *srow = p8_mem + src_y * 64;
+        uint8_t *drow = fb + (y0 + py) * 64;
+        for (int px = px_start; px < px_end; px++) {
+            int src_x = sx + (flip_x ? (pw - 1 - px) : px);
+            if (src_x < 0 || src_x >= 128) continue;
+            uint8_t byte = srow[src_x >> 1];
+            int c = (src_x & 1) ? (byte >> 4) : (byte & 0xF);
+            if (palt & (1 << c)) continue;          // transparency (before pal)
+            c = p8_draw_pal[c] & 0xF;
+            int x = x0 + px;
+            uint8_t *d = drow + (x >> 1);
+            if (x & 1) *d = (uint8_t)((*d & 0x0F) | (c << 4));
+            else       *d = (uint8_t)((*d & 0xF0) | c);
+        }
+    }
+}
+
 static int p8_spr(lua_State *L) {
     int n = (int)luaL_checknumber(L, 1);
     int dx = (int)luaL_optnumber(L, 2, 0);
@@ -477,46 +526,7 @@ static int p8_spr(lua_State *L) {
 
     int pw = (int)(w * 8), ph = (int)(h * 8);
     // Sprite sheet is 16 sprites wide (128px / 8px)
-    int sx = (n % 16) * 8;
-    int sy = (n / 16) * 8;
-
-    // Screen position after camera; clip the sprite rectangle once against
-    // the clip rect and the screen instead of testing every pixel.
-    int x0 = dx - p8_camera_x, y0 = dy - p8_camera_y;
-    int cx0 = p8_clip_x < 0 ? 0 : p8_clip_x;
-    int cy0 = p8_clip_y < 0 ? 0 : p8_clip_y;
-    int cx1 = p8_clip_x + p8_clip_w; if (cx1 > 128) cx1 = 128;
-    int cy1 = p8_clip_y + p8_clip_h; if (cy1 > 128) cy1 = 128;
-    int px_start = cx0 - x0 > 0 ? cx0 - x0 : 0;
-    int px_end   = cx1 - x0 < pw ? cx1 - x0 : pw;
-    int py_start = cy0 - y0 > 0 ? cy0 - y0 : 0;
-    int py_end   = cy1 - y0 < ph ? cy1 - y0 : ph;
-    if (px_start >= px_end || py_start >= py_end) return 0;
-
-    uint8_t *fb = gfx_get_fb();
-    const uint16_t palt = p8_palt_mask;
-    const bool fill = (p8_fill_pattern != 0);
-
-    for (int py = py_start; py < py_end; py++) {
-        int src_y = sy + (flip_y ? (ph - 1 - py) : py);
-        if (src_y < 0 || src_y >= 128) continue;
-        const uint8_t *srow = p8_mem + src_y * 64;
-        int y = y0 + py;
-        uint8_t *drow = fb + y * 64;
-        for (int px = px_start; px < px_end; px++) {
-            int src_x = sx + (flip_x ? (pw - 1 - px) : px);
-            if (src_x < 0 || src_x >= 128) continue;
-            uint8_t byte = srow[src_x >> 1];
-            int c = (src_x & 1) ? (byte >> 4) : (byte & 0xF);
-            if (palt & (1 << c)) continue;          // transparency (before pal)
-            int x = x0 + px;
-            if (fill && p8_fill_check(x, y)) continue;
-            c = p8_draw_pal[c] & 0xF;
-            uint8_t *d = drow + (x >> 1);
-            if (x & 1) *d = (uint8_t)((*d & 0x0F) | (c << 4));
-            else       *d = (uint8_t)((*d & 0xF0) | c);
-        }
-    }
+    p8_blit_sheet((n % 16) * 8, (n / 16) * 8, pw, ph, dx, dy, flip_x, flip_y);
     return 0;
 }
 
@@ -541,7 +551,7 @@ static int p8_sspr(lua_State *L) {
             uint8_t byte = p8_mem[addr];
             int c = (src_x & 1) ? ((byte >> 4) & 0xF) : (byte & 0xF);
             if (p8_palt_mask & (1 << c)) continue;
-            p8_pixel(dx + px, dy + py, c);
+            p8_pixel_nofill(dx + px, dy + py, c);
         }
     }
     return 0;
@@ -604,22 +614,14 @@ static int p8_map(lua_State *L) {
                 uint8_t flags = p8_mem[P8_FLAGS + tile];
                 if (!(flags & layer)) continue;
             }
-            // Draw the sprite at tile position
+            // Draw the sprite at tile position (skip tiles outside the clip rect)
             int draw_x = sx + tx * 8;
             int draw_y = sy + ty * 8;
-            int spr_sx = (tile % 16) * 8;
-            int spr_sy = (tile / 16) * 8;
-            for (int py = 0; py < 8; py++) {
-                for (int px = 0; px < 8; px++) {
-                    int src_x = spr_sx + px;
-                    int src_y = spr_sy + py;
-                    int a = (src_y * 64) + (src_x / 2);
-                    uint8_t byte = p8_mem[a];
-                    int c = (src_x & 1) ? ((byte >> 4) & 0xF) : (byte & 0xF);
-                    if (p8_palt_mask & (1 << c)) continue;
-                    p8_pixel(draw_x + px, draw_y + py, c);
-                }
-            }
+            int scr_x = draw_x - p8_camera_x, scr_y = draw_y - p8_camera_y;
+            if (scr_x + 8 <= p8_clip_x || scr_x >= p8_clip_x + p8_clip_w ||
+                scr_y + 8 <= p8_clip_y || scr_y >= p8_clip_y + p8_clip_h)
+                continue;
+            p8_blit_sheet((tile % 16) * 8, (tile / 16) * 8, 8, 8, draw_x, draw_y, 0, 0);
         }
     }
     return 0;
@@ -1896,8 +1898,25 @@ void p8_register_api(lua_State *L) {
     lua_register(L, "del", p8_del);
     lua_register(L, "deli", p8_deli);
     lua_register(L, "count", p8_count);
-    lua_register(L, "all", p8_all);
-    lua_register(L, "foreach", p8_foreach);
+    // all() / foreach() are defined in Lua below (PICO-8 semantics, faster
+    // than a C iterator: no C call per loop step)
+    (void)p8_all; (void)p8_foreach;
+    if (luaL_dostring(L,
+        "local function all_(a)\n"
+        "  if a == nil or #a == 0 then return function() end end\n"
+        "  local i, prev = 1, nil\n"
+        "  return function()\n"
+        "    if a[i] == prev then i = i + 1 end\n"               /* advance unless deleted */
+        "    while a[i] == nil and i <= #a do i = i + 1 end\n"   /* skip holes */
+        "    prev = a[i]\n"
+        "    return prev\n"
+        "  end\n"
+        "end\n"
+        "all = all_\n"
+        "foreach = function(a, f) for v in all_(a) do f(v) end end\n") != LUA_OK) {
+        printf("all/foreach: %s\n", lua_tostring(L, -1));
+        lua_pop(L, 1);
+    }
 
     // String
     lua_register(L, "sub", p8_sub);
