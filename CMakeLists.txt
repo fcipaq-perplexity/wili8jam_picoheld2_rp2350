@@ -15,7 +15,7 @@ set_property(CACHE PICOHELD2_HW_VARIANT PROPERTY STRINGS 0 1)
 
 # System clock in kHz (252000 = exact 252 MHz PLL setting; e.g. 300000 for a
 # faster LCD refresh - the DPI scanout is DMA bound and scales with clk_sys)
-set(HELD_SYS_CLOCK_KHZ 252000 CACHE STRING "System clock in kHz")
+set(HELD_SYS_CLOCK_KHZ 300000 CACHE STRING "System clock in kHz")
 
 if(WIN32)
     set(USERHOME $ENV{USERPROFILE})

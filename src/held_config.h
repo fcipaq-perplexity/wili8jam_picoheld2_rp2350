@@ -161,7 +161,12 @@
 
 // System clock in kHz (normally set via the CMake cache variable)
 #ifndef HELD_SYS_CLOCK_KHZ
-#define HELD_SYS_CLOCK_KHZ 252000
+#define HELD_SYS_CLOCK_KHZ 300000
+#endif
+
+// Core voltage (hardware/vreg.h). 1.20 V is enough for 300 MHz.
+#ifndef HELD_VREG_VOLTAGE
+#define HELD_VREG_VOLTAGE VREG_VOLTAGE_1_20
 #endif
 
 #endif // HELD_CONFIG_H

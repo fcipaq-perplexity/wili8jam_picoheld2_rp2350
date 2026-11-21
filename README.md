@@ -21,7 +21,7 @@ Runs PICO-8 `.p8` and `.p8.png` cartridges from an SD card on the Pico Held 2's 
 | | |
 |-|-|
 | **Board** | Pico Held 2, RP2350B edition (board definition: `boards/picoheld_2.h`) |
-| **CPU** | Dual ARM Cortex-M33 @ 252 MHz |
+| **CPU** | Dual ARM Cortex-M33 @ 300 MHz (1.20 V) |
 | **RAM** | 520 KB SRAM + 8 MB PSRAM (APS6404L on GPIO 0, 84 MHz) |
 | **Flash** | 16 MB |
 | **Storage** | microSD (FAT32), SPI0 |
@@ -71,7 +71,7 @@ Options:
 - `-DPICOHELD2_HW_VARIANT=0` -- Pico Held 2 v1.5, SunmaxIC panel (default)
 - `-DPICOHELD2_HW_VARIANT=1` -- Pico Held 2 v1.4, Buydisplay panel
 - `-DHELD_HOT_CODE_IN_RAM=ON` -- link the Lua VM core, the allocator and the PICO-8 drawing code into RAM instead of running them from flash through the XIP cache (default ON, ~100 KB RAM)
-- `-DHELD_SYS_CLOCK_KHZ=252000` -- system clock (default 252 MHz). The LCD scanout is DMA bound, so the panel refresh scales with it (about 44 Hz at 252 MHz). In the game loop frames are dropped rather than slowing a cart down.
+- `-DHELD_SYS_CLOCK_KHZ=300000` -- system clock (default 300 MHz at 1.20 V, `HELD_VREG_VOLTAGE` in `src/held_config.h`). The LCD scanout is DMA bound, so the panel refresh scales with it (about 44 Hz at 252 MHz). In the game loop frames are dropped rather than slowing a cart down.
 
 Outputs:
 
