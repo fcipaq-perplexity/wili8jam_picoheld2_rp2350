@@ -852,37 +852,78 @@ static int p8_count(lua_State *L) {
     return 1;
 }
 
-// all(t) — iterator safe for deletion during iteration
-// Returns an iterator function that captures the table and an index upvalue
+// all(t) / foreach(t, f) — PICO-8 semantics, safe for del() during iteration:
+//   if a[i] == prev then i += 1 end            -- advance unless current was deleted
+//   while a[i] == nil and i <= #a do i += 1 end -- skip holes
+//   prev = a[i]; return prev
+// If the current element is deleted, the next one moves into slot i and is
+// returned next instead of being skipped.
+// Iterator upvalues: 1 = table, 2 = index i, 3 = prev (last returned value)
 static int p8_all_iter(lua_State *L) {
-    int i = (int)lua_tointeger(L, lua_upvalueindex(2));
-    int n = (int)lua_rawlen(L, lua_upvalueindex(1));
-    i++;
-    if (i > n) return 0;
+    const int t = lua_upvalueindex(1);
+    lua_Integer i = lua_tointeger(L, lua_upvalueindex(2));
+    lua_rawgeti(L, t, i);
+    if (lua_rawequal(L, -1, lua_upvalueindex(3))) {   // not deleted: advance
+        lua_pop(L, 1);
+        lua_rawgeti(L, t, ++i);
+    }
+    if (lua_isnil(L, -1)) {                            // skip holes
+        lua_Integer n = (lua_Integer)lua_rawlen(L, t);
+        while (lua_isnil(L, -1) && i <= n) {
+            lua_pop(L, 1);
+            lua_rawgeti(L, t, ++i);
+        }
+    }
     lua_pushinteger(L, i);
-    lua_replace(L, lua_upvalueindex(2)); // update index
-    lua_rawgeti(L, lua_upvalueindex(1), i);
-    return 1;
+    lua_replace(L, lua_upvalueindex(2));
+    lua_pushvalue(L, -1);
+    lua_replace(L, lua_upvalueindex(3));
+    return 1;                                          // nil ends the loop
+}
+
+static int p8_all_empty(lua_State *L) {
+    (void)L;
+    return 0;
 }
 
 static int p8_all(lua_State *L) {
+    if (lua_isnoneornil(L, 1)) {              // all(nil): empty iterator (PICO-8)
+        lua_pushcfunction(L, p8_all_empty);
+        return 1;
+    }
     luaL_checktype(L, 1, LUA_TTABLE);
-    lua_pushvalue(L, 1);       // table as upvalue 1
-    lua_pushinteger(L, 0);     // index as upvalue 2
-    lua_pushcclosure(L, p8_all_iter, 2);
+    lua_pushvalue(L, 1);       // table      (upvalue 1)
+    lua_pushinteger(L, 1);     // index i    (upvalue 2)
+    lua_pushnil(L);            // prev       (upvalue 3)
+    lua_pushcclosure(L, p8_all_iter, 3);
     return 1;
 }
 
-// foreach(t, f) — re-check length each iteration (table may be modified by callback)
+// foreach(t, f) — same iteration rules as all()
 static int p8_foreach(lua_State *L) {
+    if (lua_isnoneornil(L, 1)) return 0;
     luaL_checktype(L, 1, LUA_TTABLE);
     luaL_checktype(L, 2, LUA_TFUNCTION);
-    int i = 1;
-    while (i <= (int)lua_rawlen(L, 1)) {
-        lua_pushvalue(L, 2);
+    lua_Integer i = 1;
+    lua_pushnil(L);                           // prev at index 3
+    for (;;) {
         lua_rawgeti(L, 1, i);
+        if (lua_rawequal(L, -1, 3)) {         // not deleted: advance
+            lua_pop(L, 1);
+            lua_rawgeti(L, 1, ++i);
+        }
+        if (lua_isnil(L, -1)) {
+            lua_Integer n = (lua_Integer)lua_rawlen(L, 1);
+            while (lua_isnil(L, -1) && i <= n) {
+                lua_pop(L, 1);
+                lua_rawgeti(L, 1, ++i);
+            }
+            if (lua_isnil(L, -1)) { lua_pop(L, 1); break; }
+        }
+        lua_copy(L, -1, 3);                   // prev = value
+        lua_pushvalue(L, 2);                  // f
+        lua_insert(L, -2);                    // f, value
         lua_call(L, 1, 0);
-        i++;
     }
     return 0;
 }
