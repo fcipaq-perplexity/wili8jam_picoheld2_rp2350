@@ -64,6 +64,10 @@
 
 LCD_DPI* lcd_this = NULL;
 
+// Incremented once per frame in the DMA IRQ (end of frame / start of vblank).
+// Lets single-buffer users write the frame right behind the retrace.
+volatile uint32_t lcd_vsync_count = 0;
+
 /******************************* Implementation ****************************/
 /*
  * Mode 0 software SPI
@@ -272,6 +276,8 @@ void __isr dma_handler() {
     return;
 
   dma_irqn_acknowledge_channel(LCD_DMA_IRQ, lcd_this->m_dma_chan[0]);
+
+  lcd_vsync_count++;
 
   if (lcd_this->m_refresh_mode == LCD_FRR_REFRESH)
     lcd_this->cycle_bufs();

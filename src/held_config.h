@@ -116,9 +116,12 @@
 /* ---------------------------------------------------------------------------
  * Display / system
  * ------------------------------------------------------------------------- */
-// LCD framebuffers (240x240x8bit = 57.6 KB each): 2 = double buffered, 1 = single
+// LCD framebuffers (240x240x8bit = 57.6 KB each):
+//   1 = single buffer, written by core 1 right after vsync in scan order
+//       ("racing the beam", tear-free); frees 57.6 KB for the Lua SRAM pool
+//   2 = double buffered (back buffer + swap at vsync)
 #ifndef HELD_LCD_NUM_FB
-#define HELD_LCD_NUM_FB         2
+#define HELD_LCD_NUM_FB         1
 #endif
 
 // Bus fabric priority (who wins when CPU and DMA hit the same SRAM bank /
@@ -135,10 +138,15 @@
 // Lua allocator: objects up to HELD_LUA_SRAM_MAX_OBJ bytes are placed in an
 // internal-SRAM pool of HELD_LUA_SRAM_POOL_KB (taken from the C heap after
 // the LCD framebuffers), everything else / the overflow goes to PSRAM.
-// (144 KB leaves ~19 KB of C heap with HELD_HOT_CODE_IN_RAM; at runtime only
-// FatFS's long file name buffer (~0.5 KB) comes from the C heap)
+// Sized to leave ~20 KB of C heap with HELD_HOT_CODE_IN_RAM; at runtime only
+// FatFS's long file name buffer (~0.5 KB) comes from the C heap. If the
+// malloc fails, the pool halves itself until it fits.
 #ifndef HELD_LUA_SRAM_POOL_KB
+#if HELD_LCD_NUM_FB == 1
+#define HELD_LUA_SRAM_POOL_KB 196
+#else
 #define HELD_LUA_SRAM_POOL_KB 144
+#endif
 #endif
 // 2048: the Lua stack and the bytecode / constant arrays of most functions
 // (read for every executed instruction) fit and land in SRAM.

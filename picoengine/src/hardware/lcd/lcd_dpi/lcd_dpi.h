@@ -35,6 +35,9 @@
 
 #define LCD_DMA_IRQ (0)  // 0 or 1
 
+// Frame counter, incremented in the DMA IRQ at the end of each frame
+extern volatile uint32_t lcd_vsync_count;
+
 class LCD_DPI : public LCD
 {
   private:   

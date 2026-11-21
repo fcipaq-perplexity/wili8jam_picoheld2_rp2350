@@ -494,6 +494,51 @@ static void present_now(const uint8_t *fb4, const uint8_t *disp_pal, const uint1
 #endif
 }
 
+#if HELD_LCD_NUM_FB == 1
+// Single framebuffer, tear-free by racing the beam: the scanout reads the FB
+// column by column (column 239 first, each column for 3 panel lines, ~22 ms
+// per frame). Right after the end-of-frame IRQ (lcd_vsync_count changes) we
+// write the palette and then the columns in scan order; writing all of them
+// takes ~1-2 ms, so we stay far ahead of the scan.
+// Returns the time spent writing (us), excluding the wait for vsync.
+static uint32_t present_vsync(const uint8_t *fb4, const uint8_t *disp_pal, const uint16_t *pal565) {
+    gbuffer_t fb;
+    if (lcd->get_fb(&fb) != LCD_SUCCESS) return 0;
+    const int stride = fb.width;
+
+    uint16_t pal[16];
+    for (int i = 0; i < 16; i++)
+        pal[i] = pal565[disp_pal ? (disp_pal[i] & 0x0F) : i];
+
+    uint32_t v = lcd_vsync_count;
+    while (lcd_vsync_count == v) tight_loop_contents();
+    uint32_t t0 = time_us_32();
+
+    for (int i = 0; i < 16; i++) hw_pal[i] = pal[i];
+
+    for (int c = LCD_W - 1; c >= 0; ) {
+        const int sx = lut_x[c];
+        const uint8_t *col = fb4 + (sx >> 1);
+        const int sh = (sx & 1) * 4;
+        color8_t *d = fb.data + c;
+        if (c > 0 && lut_x[c - 1] == sx) {
+            // two identical columns (c, c-1)
+            for (int y = 0; y < LCD_H; y++, d += stride) {
+                uint8_t px = (uint8_t)((col[lut_y[y] * (P8_W / 2)] >> sh) & 0x0F);
+                d[0] = px;
+                d[-1] = px;
+            }
+            c -= 2;
+        } else {
+            for (int y = 0; y < LCD_H; y++, d += stride)
+                d[0] = (uint8_t)((col[lut_y[y] * (P8_W / 2)] >> sh) & 0x0F);
+            c -= 1;
+        }
+    }
+    return time_us_32() - t0;
+}
+#endif
+
 // ---- present on core 1 ------------------------------------------------------
 // Core 0 copies the 8 KB PICO-8 screen + screen palette into a staging buffer
 // and continues with the next frame; core 1 scales it into the LCD back buffer.
@@ -508,9 +553,13 @@ static void core1_present_loop(void) {
     core1_running = true;
     while (true) {
         (void)multicore_fifo_pop_blocking();
+#if HELD_LCD_NUM_FB == 1
+        present_us_sum += present_vsync(stage_fb4, stage_has_pal ? stage_pal : nullptr, stage_pal565);
+#else
         uint32_t t0 = time_us_32();
         present_now(stage_fb4, stage_has_pal ? stage_pal : nullptr, stage_pal565);
         present_us_sum += time_us_32() - t0;
+#endif
         present_count++;
         __dmb();
         core1_busy = false;
