@@ -266,6 +266,7 @@ static const char *l_str2d (const char *s, lua_Number *result) {
     if (endptr != NULL)
       endptr = s + (endptr - buff);  /* make relative to 's' */
   }
+  *result = l_p8qr(*result);  /* wili8jam: PICO-8 16.16 literal (luaconf.h) */
   return endptr;
 }
 

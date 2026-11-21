@@ -194,7 +194,9 @@ static int p8_print(lua_State *L) {
     if (lua_gettop(L) >= 3) {
         x = (int)luaL_checknumber(L, 2);
         y = (int)luaL_checknumber(L, 3);
-        c = lua_isnoneornil(L, 4) ? p8_draw_color : (int)luaL_checknumber(L, 4);
+        // PICO-8 counts arguments: an explicit nil colour is 0 (black),
+        // only a missing one means "current colour" (print_outline-style code)
+        c = lua_isnone(L, 4) ? p8_draw_color : (int)lua_tonumber(L, 4);
     } else {
         x = p8_cursor_x;
         y = p8_cursor_y;
@@ -705,14 +707,14 @@ static int p8_mid(lua_State *L) {
 // PICO-8 sin: sin(0.25) = -1, uses 0-1 turns
 static int p8_sin(lua_State *L) {
     float x = (float)luaL_checknumber(L, 1);
-    lua_pushnumber(L, -sinf(x * 2.0f * (float)M_PI));
+    lua_pushnumber(L, l_p8qr(-sinf(x * 2.0f * (float)M_PI)));
     return 1;
 }
 
 // PICO-8 cos: cos(0) = 1, uses 0-1 turns
 static int p8_cos(lua_State *L) {
     float x = (float)luaL_checknumber(L, 1);
-    lua_pushnumber(L, cosf(x * 2.0f * (float)M_PI));
+    lua_pushnumber(L, l_p8qr(cosf(x * 2.0f * (float)M_PI)));
     return 1;
 }
 
@@ -725,12 +727,12 @@ static int p8_atan2(lua_State *L) {
     // Standard atan2(y,x) but PICO-8 inverts y
     float a = atan2f(-dy, dx) / (2.0f * (float)M_PI);
     if (a < 0) a += 1.0f;
-    lua_pushnumber(L, a);
+    lua_pushnumber(L, l_p8qr(a));
     return 1;
 }
 
 static int p8_sqrt(lua_State *L) {
-    lua_pushnumber(L, sqrtf((float)luaL_checknumber(L, 1)));
+    lua_pushnumber(L, l_p8q(sqrtf((float)luaL_checknumber(L, 1))));
     return 1;
 }
 
@@ -760,7 +762,7 @@ static int p8_rnd(lua_State *L) {
     }
     float x = lua_isnoneornil(L, 1) ? 1.0f : (float)luaL_checknumber(L, 1);
     float r = (float)(p8_rng_next() & 0xFFFF) / 65536.0;
-    lua_pushnumber(L, r * x);
+    lua_pushnumber(L, l_p8q((double)r * x));
     return 1;
 }
 
@@ -852,37 +854,78 @@ static int p8_count(lua_State *L) {
     return 1;
 }
 
-// all(t) — iterator safe for deletion during iteration
-// Returns an iterator function that captures the table and an index upvalue
+// all(t) / foreach(t, f) — PICO-8 semantics, safe for del() during iteration:
+//   if a[i] == prev then i += 1 end            -- advance unless current was deleted
+//   while a[i] == nil and i <= #a do i += 1 end -- skip holes
+//   prev = a[i]; return prev
+// If the current element is deleted, the next one moves into slot i and is
+// returned next instead of being skipped.
+// Iterator upvalues: 1 = table, 2 = index i, 3 = prev (last returned value)
 static int p8_all_iter(lua_State *L) {
-    int i = (int)lua_tointeger(L, lua_upvalueindex(2));
-    int n = (int)lua_rawlen(L, lua_upvalueindex(1));
-    i++;
-    if (i > n) return 0;
+    const int t = lua_upvalueindex(1);
+    lua_Integer i = lua_tointeger(L, lua_upvalueindex(2));
+    lua_rawgeti(L, t, i);
+    if (lua_rawequal(L, -1, lua_upvalueindex(3))) {   // not deleted: advance
+        lua_pop(L, 1);
+        lua_rawgeti(L, t, ++i);
+    }
+    if (lua_isnil(L, -1)) {                            // skip holes
+        lua_Integer n = (lua_Integer)lua_rawlen(L, t);
+        while (lua_isnil(L, -1) && i <= n) {
+            lua_pop(L, 1);
+            lua_rawgeti(L, t, ++i);
+        }
+    }
     lua_pushinteger(L, i);
-    lua_replace(L, lua_upvalueindex(2)); // update index
-    lua_rawgeti(L, lua_upvalueindex(1), i);
-    return 1;
+    lua_replace(L, lua_upvalueindex(2));
+    lua_pushvalue(L, -1);
+    lua_replace(L, lua_upvalueindex(3));
+    return 1;                                          // nil ends the loop
+}
+
+static int p8_all_empty(lua_State *L) {
+    (void)L;
+    return 0;
 }
 
 static int p8_all(lua_State *L) {
+    if (lua_isnoneornil(L, 1)) {              // all(nil): empty iterator (PICO-8)
+        lua_pushcfunction(L, p8_all_empty);
+        return 1;
+    }
     luaL_checktype(L, 1, LUA_TTABLE);
-    lua_pushvalue(L, 1);       // table as upvalue 1
-    lua_pushinteger(L, 0);     // index as upvalue 2
-    lua_pushcclosure(L, p8_all_iter, 2);
+    lua_pushvalue(L, 1);       // table      (upvalue 1)
+    lua_pushinteger(L, 1);     // index i    (upvalue 2)
+    lua_pushnil(L);            // prev       (upvalue 3)
+    lua_pushcclosure(L, p8_all_iter, 3);
     return 1;
 }
 
-// foreach(t, f) — re-check length each iteration (table may be modified by callback)
+// foreach(t, f) — same iteration rules as all()
 static int p8_foreach(lua_State *L) {
+    if (lua_isnoneornil(L, 1)) return 0;
     luaL_checktype(L, 1, LUA_TTABLE);
     luaL_checktype(L, 2, LUA_TFUNCTION);
-    int i = 1;
-    while (i <= (int)lua_rawlen(L, 1)) {
-        lua_pushvalue(L, 2);
+    lua_Integer i = 1;
+    lua_pushnil(L);                           // prev at index 3
+    for (;;) {
         lua_rawgeti(L, 1, i);
+        if (lua_rawequal(L, -1, 3)) {         // not deleted: advance
+            lua_pop(L, 1);
+            lua_rawgeti(L, 1, ++i);
+        }
+        if (lua_isnil(L, -1)) {
+            lua_Integer n = (lua_Integer)lua_rawlen(L, 1);
+            while (lua_isnil(L, -1) && i <= n) {
+                lua_pop(L, 1);
+                lua_rawgeti(L, 1, ++i);
+            }
+            if (lua_isnil(L, -1)) { lua_pop(L, 1); break; }
+        }
+        lua_copy(L, -1, 3);                   // prev = value
+        lua_pushvalue(L, 2);                  // f
+        lua_insert(L, -2);                    // f, value
         lua_call(L, 1, 0);
-        i++;
     }
     return 0;
 }
@@ -945,7 +988,11 @@ static int p8_tostr(lua_State *L) {
             int iv = (int)v;
             snprintf(buf, sizeof(buf), "0x%04x", (unsigned)(iv & 0xFFFF));
         } else {
-            snprintf(buf, sizeof(buf), "%g", (double)v);
+            // Lua's (PICO-8 patched) number formatting: 1 -> "1", 0.5 -> "0.5".
+            // (The SDK's printf renders "%g" as "1.00000".)
+            lua_pushvalue(L, 1);
+            luaL_tolstring(L, -1, NULL);
+            return 1;
         }
         lua_pushstring(L, buf);
         return 1;
@@ -971,7 +1018,7 @@ static int p8_tonum(lua_State *L) {
         v = strtod(s, &end);
     }
     if (end == s) { lua_pushnil(L); return 1; }
-    lua_pushnumber(L, (lua_Number)v);
+    lua_pushnumber(L, l_p8qr((lua_Number)v));
     return 1;
 }
 
@@ -1007,7 +1054,7 @@ static int p8_split(lua_State *L) {
             char *nend;
             double v = strtod(p, &nend);
             if (nend == p + toklen && toklen > 0) {
-                lua_pushnumber(L, (lua_Number)v);
+                lua_pushnumber(L, l_p8qr((lua_Number)v));
             } else {
                 lua_pushlstring(L, p, toklen);
             }
@@ -1033,7 +1080,7 @@ static int p8_type(lua_State *L) {
 static int p8_time(lua_State *L) {
     (void)L;
     int64_t us = absolute_time_diff_us(p8_start_time, get_absolute_time());
-    lua_pushnumber(L, (lua_Number)(us / 1000000.0));
+    lua_pushnumber(L, l_p8q((lua_Number)(us / 1000000.0)));
     return 1;
 }
 

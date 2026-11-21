@@ -815,8 +815,34 @@ static inline LUA_NUMBER luai_p8_sanitize(LUA_NUMBER r) {
     return r;
 }
 
-#define luai_numdiv(L,a,b)  luai_p8_sanitize((a)/(b))
-#define luai_nummul(L,a,b)  luai_p8_sanitize((a)*(b))
+/*
+** PICO-8 16.16 quantisation (wili8jam): PICO-8 numbers are multiples of
+** 1/65536 in [-32768, 32768). Sums and differences of such values are exact
+** in double; products, quotients and powers are truncated to 1/65536 (floor,
+** like PICO-8's (a*b)>>16), number literals / tonumber() are rounded to
+** 1/65536 (0.1 -> 0x0.199a, see l_str2d in lobject.c). Without this e.g.
+** "hs += 0.1 ... hs -= 0.1" never returns to exactly 0 and objects drift.
+** Values outside the 16.16 range are left as they are.
+*/
+static inline LUA_NUMBER l_p8q(LUA_NUMBER x) {      /* floor to 1/65536 */
+    LUA_NUMBER y = x * 65536.0;
+    if (!(y > -2147483648.0 && y < 2147483648.0)) return x;
+    int i = (int)y;
+    if ((LUA_NUMBER)i > y) i--;
+    return (LUA_NUMBER)i * (1.0 / 65536.0);
+}
+static inline LUA_NUMBER l_p8qr(LUA_NUMBER x) {     /* round to 1/65536 */
+    LUA_NUMBER y = x * 65536.0 + 0.5;
+    if (!(y > -2147483648.0 && y < 2147483648.0)) return x;
+    int i = (int)y;
+    if ((LUA_NUMBER)i > y) i--;
+    return (LUA_NUMBER)i * (1.0 / 65536.0);
+}
+
+#define luai_numdiv(L,a,b)  l_p8q(luai_p8_sanitize((a)/(b)))
+#define luai_nummul(L,a,b)  l_p8q(luai_p8_sanitize((a)*(b)))
+#define luai_numpow(L,a,b)  \
+  l_p8q(luai_p8_sanitize(((b) == 2) ? (a)*(a) : pow(a,b)))
 #define luai_numadd(L,a,b)  luai_p8_sanitize((a)+(b))
 #define luai_numsub(L,a,b)  luai_p8_sanitize((a)-(b))
 #define luai_numunm(L,a)    (-(a))
