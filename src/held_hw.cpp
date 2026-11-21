@@ -238,7 +238,7 @@ void held_hw_early_init(void) {
 }
 
 void held_set_sys_clock(void) {
-    vreg_set_voltage(HELD_VREG_VOLTAGE);
+    vreg_set_voltage(VREG_VOLTAGE_1_30);
     sleep_ms(10);  // let the voltage settle
 #if HELD_SYS_CLOCK_KHZ == 252000
     set_sys_clock_pll(1260000000, 5, 1);  // VCO 1260 MHz / 5 / 1 = 252 MHz exactly

@@ -161,17 +161,7 @@
 
 // System clock in kHz (normally set via the CMake cache variable)
 #ifndef HELD_SYS_CLOCK_KHZ
-#define HELD_SYS_CLOCK_KHZ 300000
-#endif
-
-// Core voltage (hardware/vreg.h). 1.20 V is enough for 300 MHz.
-#ifndef HELD_VREG_VOLTAGE
-#define HELD_VREG_VOLTAGE VREG_VOLTAGE_1_20
-#endif
-
-// Lua stack size (slots, 16 bytes each) set up in SRAM after _init()
-#ifndef HELD_LUA_STACK_SLOTS
-#define HELD_LUA_STACK_SLOTS 512
+#define HELD_SYS_CLOCK_KHZ 252000
 #endif
 
 #endif // HELD_CONFIG_H
